@@ -671,6 +671,10 @@ public class ClaudeChatWindow {
 
     private void addCodeSnippet(String selectionInfo) {
         if (selectionInfo != null && !selectionInfo.isEmpty()) {
+            // Ensure the browser has focus so the frontend can focus the input field
+            if (browser != null) {
+                browser.getComponent().requestFocus();
+            }
             callJavaScript("addCodeSnippet", JsUtils.escapeJs(selectionInfo));
         }
     }

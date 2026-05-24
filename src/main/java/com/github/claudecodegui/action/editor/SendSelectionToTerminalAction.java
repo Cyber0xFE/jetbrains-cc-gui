@@ -10,7 +10,6 @@ import com.intellij.openapi.application.ApplicationManager;
 import com.intellij.openapi.application.ReadAction;
 import com.intellij.openapi.diagnostic.Logger;
 import com.intellij.openapi.editor.Editor;
-import com.intellij.openapi.editor.SelectionModel;
 import com.intellij.openapi.project.DumbAware;
 import com.intellij.openapi.project.Project;
 import com.intellij.openapi.vfs.VirtualFile;
@@ -54,11 +53,25 @@ public class SendSelectionToTerminalAction extends AnAction implements DumbAware
 
     /**
      * Main logic for executing the action.
+     * With selection: sends selected code and opens the panel.
+     * Without selection: just opens the CCG panel.
      */
     @Override
     public void actionPerformed(@NotNull AnActionEvent e) {
         Project project = e.getProject();
         if (project == null) {
+            return;
+        }
+
+        Editor editor = e.getData(CommonDataKeys.EDITOR);
+        if (editor == null) {
+            return;
+        }
+
+        String selectedText = editor.getSelectionModel().getSelectedText();
+        if (selectedText == null || selectedText.isEmpty()) {
+            // No selection — just open the panel
+            activateToolWindow(project);
             return;
         }
 
@@ -92,7 +105,9 @@ public class SendSelectionToTerminalAction extends AnAction implements DumbAware
 
     /**
      * Updates the action's availability state.
-     * Only enabled when an editor is active, a file is open, and text is selected.
+     * Always enabled when an editor is active.
+     * With selection: sends selected code and opens the panel.
+     * Without selection: just opens the CCG panel.
      */
     @Override
     public void update(@NotNull AnActionEvent e) {
@@ -103,16 +118,9 @@ public class SendSelectionToTerminalAction extends AnAction implements DumbAware
         }
 
         Editor editor = e.getData(CommonDataKeys.EDITOR);
-        if (editor == null) {
-            e.getPresentation().setEnabledAndVisible(false);
-            return;
-        }
 
-        SelectionModel selectionModel = editor.getSelectionModel();
-        String selectedText = selectionModel.getSelectedText();
-
-        // Only enable when there is selected text
-        e.getPresentation().setEnabledAndVisible(selectedText != null && !selectedText.isEmpty());
+        // Always enable when an editor is active, regardless of selection
+        e.getPresentation().setEnabledAndVisible(editor != null);
     }
 
     /**
@@ -187,6 +195,17 @@ public class SendSelectionToTerminalAction extends AnAction implements DumbAware
             ApplicationManager.getApplication().invokeLater(() -> {
                 com.intellij.openapi.ui.Messages.showInfoMessage(project, message, ClaudeCodeGuiBundle.message("dialog.info.title"));
             });
+        }
+    }
+
+    /**
+     * Activate the CCG tool window without sending any content.
+     */
+    private void activateToolWindow(@NotNull Project project) {
+        ToolWindowManager toolWindowManager = ToolWindowManager.getInstance(project);
+        ToolWindow toolWindow = toolWindowManager.getToolWindow("CCG");
+        if (toolWindow != null) {
+            toolWindow.activate(null, true);
         }
     }
 }
