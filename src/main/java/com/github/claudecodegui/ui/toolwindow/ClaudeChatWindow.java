@@ -65,6 +65,7 @@ public class ClaudeChatWindow {
     private volatile boolean disposed = false;
     private volatile boolean initialized = false;
     private volatile boolean frontendReady = false;
+    private volatile String pendingCodeSnippet = null;
     private volatile boolean slashCommandsFetched = false;
     private final AtomicBoolean restoredHistoryLoadStarted = new AtomicBoolean(false);
 
@@ -414,7 +415,23 @@ public class ClaudeChatWindow {
     }
 
     public void addCodeSnippetFromExternal(String selectionInfo) {
-        addCodeSnippet(selectionInfo);
+        if (selectionInfo == null || selectionInfo.isEmpty()) {
+            return;
+        }
+        if (frontendReady) {
+            addCodeSnippet(selectionInfo);
+        } else {
+            // Defer until frontend signals readiness
+            pendingCodeSnippet = selectionInfo;
+        }
+    }
+
+    private void flushPendingCodeSnippet() {
+        if (pendingCodeSnippet != null) {
+            String snippet = pendingCodeSnippet;
+            pendingCodeSnippet = null;
+            addCodeSnippet(snippet);
+        }
     }
 
     public void updateTabStatus(ChatWindowDelegate.TabAnswerStatus status) {
@@ -845,6 +862,9 @@ public class ClaudeChatWindow {
             @Override
             public void setFrontendReady(boolean ready) {
                 frontendReady = ready;
+                if (ready) {
+                    flushPendingCodeSnippet();
+                }
             }
         };
     }
@@ -974,6 +994,9 @@ public class ClaudeChatWindow {
             @Override
             public void setFrontendReady(boolean ready) {
                 frontendReady = ready;
+                if (ready) {
+                    flushPendingCodeSnippet();
+                }
             }
 
             @Override
