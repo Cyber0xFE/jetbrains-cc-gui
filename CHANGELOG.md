@@ -1,3 +1,185 @@
+##### **2026年6月28日（v0.4.6）**
+
+English:
+
+✨ Features
+- Add live permission-mode hot-swap: switching the permission mode mid-turn now takes effect immediately for the current turn's subsequent tool calls — no runtime restart, no waiting for the next message. Claude pushes the new mode straight to the live runtime; Codex rebuilds thread options per turn (by @gadfly3173, closes #1380)
+- Add a GitHub Star button to the open-source promo banner: click to copy the repository URL for pasting into a browser; the main copy now reads "100% open-source and free", with full localization across 10 languages (by @zkpaiminmin)
+
+🔒 Security Hardening
+- Change the default permission mode from `bypassPermissions` to `default`, so tool calls are confirmed by default instead of auto-approved
+- PreToolUse hook now returns `ask` for Bash/Agent, overriding permissive `settings.json` allow-rules
+- Block `NODE_OPTIONS` / `LD_PRELOAD` / `DYLD_*` and similar environment variables from request-side injection
+- Scope "Always allow" for Bash/Agent to the command level instead of the whole tool
+- `acceptEdits` mode still requires explicit confirmation for command execution
+- Refuse MCP stdio shell launches whose command/args contain shell metacharacters
+- Add `--ignore-scripts` to `npm install` to prevent supply-chain RCE via install hooks
+- Harden `settings.json` / `config.json` file permissions to `0600`
+- Extend the dangerous-path check to Bash command strings and `~` expansion
+- Change the Codex default sandbox from `danger-full-access` to `workspace-write`
+- Restrict the prompt enhancer to the user settings source with a deny-all `canUseTool`
+- (all by @zkpaiminmin)
+
+🐛 Fixes
+- Fix Bedrock/Vertex/Foundry returning 403 since v0.4.5: gate `CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST=1` on `shouldHostManageProvider()` so it is set only when no cloud-provider switch is active in `settings.json`, and drop any copy inherited from the daemon's own env (by @gadfly3173, closes #1328)
+- Fix cloud-provider credentials (`AWS_PROFILE`, `AWS_REGION`, …) being absent when the IDE is launched from the macOS Dock / Windows Start Menu / Linux launcher: inject them at daemon startup so all child processes inherit the correct environment (by @sandeepyadav1478, closes #1310)
+- Fix blank tool window on Android Studio 2026.x whose bundled JBR predates b1373 and lacks `JCefAppConfig.isRemoteEnabled()`: detect the platform/JBR mismatch via reflection, widen `create()` to catch `LinkageError`, and show a targeted "upgrade your Boot JBR to b1373+" panel (all 9 locales); fall back to a native confirm dialog when the JCEF permission dialog cannot be created (by @zkpaiminmin)
+- Fix background rendering of CLI-initiated session updates: add a TurnSink channel and a perpetual reader so inter-turn results route as `session_updated` events and render without a manual reload (by @gadfly3173, closes #1305)
+- Fix whole-turn assistant message / `tool_result` loss caused by React 18 automatic batching: merge the two `onStreamEnd` `setMessages` updaters into one, and add a `__turnId` fallback to the snapshot index guard (by @gadfly3173, closes #1315)
+- Fix stale `updateMessages` writing into a freshly cleared session: advance an update-sequence barrier on `clearMessages`, cancel deferred rAF callbacks, and re-check the transition guard in the deferred path (by @gadfly3173, closes #1339)
+- Fix new sessions reusing the previous session ID in `TabStateService` / `getSessionId()`: reset `sessionId` in `setupSessionCallbacks()` and split the PermissionService routing key from the exposed session ID (by @commingling, hardened by @zkpaiminmin, closes #1192)
+- Fix cross-turn thinking deltas no longer streaming (and a new turn briefly overwriting the previous turn's thinking block): stop clearing the content/thinking buffers on `onBlockReset` and add a trailing-block guard to both the thinking and content sync paths (by @gadfly3173, closes #1369)
+- Fix characters vanishing after a duplicated leading delta (e.g. "刚刚", "咕咕嘎嘎"): thread a `stream` / `snapshot` origin through `normalizeStreamDelta` so a zero-novel match no longer locks snapshot mode on the live streaming path (by @gadfly3173, closes #1371)
+- Fix dialogs not reappearing after a safety-net timeout, the tab provider type swapping after an IDE restart, and a stale rAF snapshot on new-session clear; force-close now drains the entire pending dialog queue (by @gadfly3173, closes #1360 #1353)
+- Fix background reload binding to the wrong session by binding it to the target session ID (by @gadfly3173)
+- Fix N parallel `tool_use` (whose results arrive as N separate user messages) being falsely flagged interrupted with a red badge: sweep every consecutive trailing user message until a non-user message is reached (by @gadfly3173)
+- Fix the AI working directory resolving to the bridge install dir when the daemon starts without a project, which hid all real project history under a sanitized bridge path (by @gadfly3173, closes #1343)
+- Fix `.replace is not a function` crashes when non-string content (arrays, content blocks, numbers) reaches `MarkdownBlock` / `PermissionDialog`: normalize to readable text before rendering (by @gadfly3173)
+- Fix tab actions forcing lazy tool-window content creation while the window is closed: use `getContentManagerIfCreated()` with null guards (by @gadfly3173)
+- Fix action UI state updates not running on the EDT (by @gadfly3173)
+- Fix inline code font-size not matching the surrounding text: use `inherit` instead of a hardcoded 12.5px and keep monospace on syntax-highlighted spans (by @gadfly3173, closes #1304)
+- Fix selector dropdowns overflowing the viewport, the large model list growing unbounded, and the node-process submenu flip loop (by @moritzfl)
+
+🔧 Improvements
+- Rename the "Agent" terminology to "Prompt" across all locales (by @zkpaiminmin)
+- Add a `SECURITY.md` security policy (by @zkpaiminmin)
+
+中文：
+
+✨ 新功能
+- 新增权限模式实时热切换：对话进行中切换权限模式即时对当前轮次后续工具调用生效，无需重启 runtime、无需等待下一条消息。Claude 将新模式直接推送到运行中的 runtime；Codex 每轮重建 thread 选项（by @gadfly3173，关闭 #1380）
+- 开源推广 banner 新增 GitHub Star 按钮：点击复制仓库地址，粘贴到浏览器即可访问；主文案更新为「本项目保证 100% 开源和免费」，补全全部 10 种语言（by @zkpaiminmin）
+
+🔒 安全加固
+- 默认权限模式从 `bypassPermissions` 改为 `default`，工具调用默认需确认而非自动放行
+- PreToolUse hook 对 Bash/Agent 返回 `ask`，覆盖 `settings.json` 中过于宽松的 allow 规则
+- 阻止 `NODE_OPTIONS` / `LD_PRELOAD` / `DYLD_*` 等环境变量经请求侧注入
+- 「始终允许」对 Bash/Agent 限定到命令级，而非整个工具
+- `acceptEdits` 模式下命令执行仍要求显式确认
+- 拒绝 command/args 含 shell 元字符的 MCP stdio shell 启动
+- `npm install` 增加 `--ignore-scripts`，防止经安装钩子的供应链 RCE
+- 收紧 `settings.json` / `config.json` 文件权限到 `0600`
+- 危险路径检查扩展到 Bash 命令字符串与 `~` 展开
+- Codex 默认 sandbox 从 `danger-full-access` 改为 `workspace-write`
+- prompt enhancer 限制到 user settings 源，并使用 deny-all `canUseTool`
+- （以上均 by @zkpaiminmin）
+
+🐛 修复
+- 修复自 v0.4.5 起 Bedrock/Vertex/Foundry 返回 403：将 `CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST=1` 收敛到 `shouldHostManageProvider()`，仅在 `settings.json` 未启用云 provider 开关时设置，并清除从 daemon 自身环境继承的副本（by @gadfly3173，关闭 #1328）
+- 修复从 macOS Dock / Windows 开始菜单 / Linux 启动器打开 IDE 时云 provider 凭证（`AWS_PROFILE`、`AWS_REGION` 等）缺失：在 daemon 启动时注入，使所有子进程继承正确环境（by @sandeepyadav1478，关闭 #1310）
+- 修复 Android Studio 2026.x 工具窗空白：其内置 JBR 早于 b1373、缺失 `JCefAppConfig.isRemoteEnabled()`，通过反射检测平台/JBR 不匹配，`create()` 捕获范围放宽到 `LinkageError`，并显示「请升级 Boot JBR 到 b1373+」专属面板（全部 9 种语言）；JCEF 权限弹窗无法创建时回退到原生确认对话框（by @zkpaiminmin）
+- 修复 CLI 发起的会话更新不在后台渲染：新增 TurnSink 通道与持续 reader，将轮次间结果作为 `session_updated` 事件路由，无需手动重载即可渲染（by @gadfly3173，关闭 #1305）
+- 修复 React 18 自动批处理导致整轮助手消息 / `tool_result` 丢失：将 `onStreamEnd` 的两次 `setMessages` 合并为单个 updater，并为快照索引守卫增加 `__turnId` 回退（by @gadfly3173，关闭 #1315）
+- 修复新会话清空后陈旧 `updateMessages` 写入：在 `clearMessages` 时推进更新序列屏障、取消延迟的 rAF 回调，并在延迟路径重新校验切换守卫（by @gadfly3173，关闭 #1339）
+- 修复新会话在 `TabStateService` / `getSessionId()` 中复用上一个 session ID：在 `setupSessionCallbacks()` 重置 `sessionId`，并将 PermissionService 路由 key 与对外暴露的 session ID 拆分（by @commingling，@zkpaiminmin 加固，关闭 #1192）
+- 修复跨轮 thinking delta 不再流式（以及新一轮 thinking 短暂覆盖上一轮的 thinking 块）：`onBlockReset` 不再清空内容/thinking 缓冲，并为 thinking 与 content 同步路径都加上 trailing-block 守卫（by @gadfly3173，关闭 #1369）
+- 修复重复的首个 delta 导致后续字符消失（如「刚刚」「咕咕嘎嘎」）：为 `normalizeStreamDelta` 串入 `stream` / `snapshot` 来源，使零新增匹配在实时流路径上不再锁定 snapshot 模式（by @gadfly3173，关闭 #1371）
+- 修复安全网超时后对话框不再弹出、IDE 重启后 tab provider 类型互换、以及新会话清空时陈旧 rAF 快照；force-close 现会排空整个待处理对话框队列（by @gadfly3173，关闭 #1360 #1353）
+- 修复后台 reload 绑定到错误会话，改为绑定到目标 session ID（by @gadfly3173）
+- 修复 N 个并行 `tool_use`（其结果作为 N 条独立 user 消息到达）被误判为中断而显示红色 badge：扫描所有连续的 trailing user 消息直到遇到非 user 消息（by @gadfly3173）
+- 修复 daemon 无项目上下文启动时 AI 工作目录被解析为 bridge 安装目录，导致所有真实项目历史被隐藏在 sanitized bridge 路径下（by @gadfly3173，关闭 #1343）
+- 修复非字符串内容（数组、content block、数字）到达 `MarkdownBlock` / `PermissionDialog` 时触发 `.replace is not a function` 崩溃：渲染前归一化为可读文本（by @gadfly3173）
+- 修复 tab action 在工具窗关闭时强制懒创建工具窗内容：改用带 null 守卫的 `getContentManagerIfCreated()`（by @gadfly3173）
+- 修复 action UI 状态更新未在 EDT 线程执行（by @gadfly3173）
+- 修复行内代码字号与周围文本不一致：用 `inherit` 替代硬编码 12.5px，并保持高亮 span 的等宽字体（by @gadfly3173，关闭 #1304）
+- 修复选择器下拉菜单超出视口、大模型列表无限撑高、以及 node 进程子菜单翻转循环（by @moritzfl）
+
+🔧 改进
+- 将全部语言中的「Agent」术语改名为「Prompt」（by @zkpaiminmin）
+- 新增 `SECURITY.md` 安全策略文档（by @zkpaiminmin）
+
+---
+
+##### **2026年6月11日（v0.4.5）**
+
+English:
+
+✨ Features
+- Add Codex fast mode: new "Fast" speed mode in the model selector that maps to `service_tier=fast` for supported Codex models; normal mode preserves Codex defaults (by @llanc)
+- Add Claude Code CLI path override: new "Claude CLI Path (override)" setting in Settings → Environment lets you point the plugin at a specific `claude` binary; daemon restarts automatically on save (by @senfix, co-authored with Claude)
+- Add separate Code Font setting (Settings → Basic → Appearance), independent from the UI font: Markdown code and Bash command/output use the code font; chat text follows the IDEA UI font; both accept a custom `.ttf` / `.otf` file (by @Luna5ama, closes #1240)
+- Add Codex subscription quota panel in the model selector: shows ChatGPT Plus/Pro quota status with dual-source fetching (session message + ChatGPT API), snapshot caching, and a dedicated message for API-key mode (by @Luna5ama)
+- Add Shift+Esc shortcut to hide the CCG tool window panel (intercepted at JS level via JBCefJSQuery since JCEF consumes the key natively) (by @Cyber0xFE)
+- Add Ctrl+Alt+K to always open the CCG panel regardless of editor selection; auto-focus the input field on activation (by @Cyber0xFE)
+- Add per-message token consumption indicator at the bottom of each turn showing whole-turn aggregated input/output token count (by @suzhelan, refined by @zkpaiminmin)
+- Add SDK session to CLI session conversion: sessions created via SDK (sdk-cli / claude-vscode entrypoint) can be converted to CLI sessions, making them visible in the `/resume` list; shown as entrypoint badges in history with a "Convert to CLI" action (by @gadfly3173)
+- Add Claude Fable 5 model support with Mythos-class capabilities; add Fable 5 pricing ($10/$50 per 1M tokens) (by @zkpaiminmin)
+- Integrate Claude Code Task tracking API (TaskCreate / TaskUpdate / TaskGet / TaskList): task management tools render as collapsible agent groups with absorbed nested tool calls and persisted expand/collapse state; task list in StatusPanel supports both legacy `todowrite` and new Task API tasks (by @gadfly3173, co-authored with @zhuzhihang)
+
+🐛 Fixes
+- Fix full WSL2 compatibility suite: install Claude SDK into WSL filesystem; handle raw/forward-slash UNC WSL paths; propagate permission env vars across Windows→WSL boundary via WSLENV; merge (not replace) probed login-shell PATH to preserve Homebrew/pyenv/sdkman; migrate path handling to `WslPathUtil`; resolve Claude home at call time in session conversion (by @Gazoon007)
+- Fix tool spinner stuck permanently after stream end: preserve `tool_result` messages from the pending snapshot when the rAF-batched update is cancelled; decouple recovery from the assistant-patch branch so it fires even with no streaming assistant message (by @Cyber0xFE, hardened by @zkpaiminmin)
+- Fix code snippet sent before frontend is ready: replace retry-based approach with `PendingCodeSnippetBuffer` (AtomicReference) that flushes on the frontend-ready signal, eliminating check-then-act race (by @Cyber0xFE, refactored by @zkpaiminmin)
+- Fix usage cost overstatement: deduplicate JSONL records by `message.id` (Claude Code writes each content block as its own line, inflating counts ~2×); correct Opus 4.5/4.6/4.7/4.8 pricing from legacy $15/$75 to $5/$25 per 1M tokens (by @t7r5fz7848-lab, re-applied by @zkpaiminmin)
+- Fix Bash output code font not applying: `.bash-output-text` leaf node was overridden by the global `*` selector; declare `font-family` directly on the leaf (by @zkpaiminmin)
+- Fix settings.json env vars silently overriding webview-selected reasoning effort, `MAX_THINKING_TOKENS`, and 1M context toggle: strip controlled vars from daemon and CLI child-process env; inject inline `--settings` override so the SDK respects per-turn UI selections (by @gadfly3173)
+- Fix selected reasoning effort not passed to SDK: include `reasoningEffort` in Claude send payloads; thread it through `SessionHandler` → `ClaudeSession` → `SessionSendService`; prefer requested value over session state (by @gadfly3173)
+- Fix Codex history tool UI disappearing after restart: unwrap normalized history raw payloads during session restore so tool_use, tool_result, command details, and image-only messages survive frontend transport (by @Luna5ama)
+- Fix node process submenu causing layout loop in the webview (by @gadfly3173)
+- Fix Codex fast mode overriding service tier in standard (non-fast) mode (by @llanc)
+- Fix Markdown links with spaces/special characters: decode percent-encoded and `file://` hrefs before opening in the IDE (by @moritzfl)
+- Fix per-message token display inconsistency: stamp `turnUsage` whole-turn aggregate at turn completion; frontend reads only `turnUsage` with a breakdown tooltip (by @zkpaiminmin)
+- Fix Codex quota cache not invalidating on account switch: call `invalidateCache()` on every `switchCodexProvider` path (by @zkpaiminmin)
+- Fix Codex quota showing wrong account data in API-key mode: skip OAuth quota lookup and show a dedicated API-key-mode message (by @zkpaiminmin)
+- Fix duplicate `tool_result` in stream-end snapshot recovery; align `[tool_result]` marker trimming (by @zkpaiminmin)
+- Fix command messages leaking into display on normalized history envelopes: pass `rawMessage` to `shouldFilterCommandMessage` (by @zkpaiminmin)
+- Fix Claude CLI path input blanked on validation failure: echo back the user's input instead of an empty string (by @zkpaiminmin)
+- Fix agent group absorbing wrong children after history reload: replace streaming-count-based grouping with a purely structural rule; fix `extractAccumulatedTasks` single-pass with per-message ID trust guard for parallel TaskCreate (by @zkpaiminmin)
+- Fix symlink escape in project-boundary check on native POSIX: restrict lexical WSL fallback to WSL paths only; native POSIX goes through `getCanonicalPath` (security) (by @zkpaiminmin)
+- Fix XSS via control-character-obfuscated `href` schemes (e.g. `java&#9;script:`): reject hrefs containing C0 control characters before scheme checks in the DOMPurify hook (security) (by @zkpaiminmin)
+
+🔧 Improvements
+- Enhance Bash output rendering with dedicated CSS classes for improved syntax distinction (by @Luna5ama)
+- Improve Codex quota fetching: dual-source (session message + ChatGPT API), snapshot caching with timeout, single shared `HttpClient`, unwrapped `CompletionException` for readable errors (by @Luna5ama, @zkpaiminmin)
+- Split env var groups into `MODEL_ROUTING_ENV_VARS` and `REASONING_CONTROL_ENV_VARS` for explicit treatment, preventing the two sets from drifting independently (by @gadfly3173)
+- Add Docker build support (`Dockerfile` + `.dockerignore`) for reproducible plugin distribution without a local Java/Node toolchain (by @senfix)
+- Replace emoji blocked marker in StatusPanel TodoList with `codicon-circle-slash` for consistency with the codicon icon system (by @zkpaiminmin)
+
+中文：
+
+✨ 新功能
+- 新增 Codex 快速模式：模型选择器新增「快速」速度模式，映射到 `service_tier=fast`；普通模式保持 Codex 默认行为（by @llanc）
+- 新增 Claude Code CLI 路径覆盖：设置 → 环境新增「Claude CLI Path (override)」，允许指定自定义 `claude` 可执行文件；保存后自动重启 daemon（by @senfix，与 Claude 共同开发）
+- 设置 → 基础 → 外观新增独立「代码字体」配置，与 UI 字体分离：Markdown 代码与 Bash 命令/输出使用代码字体，聊天文本跟随 IDEA UI 字体；两者均支持自定义 `.ttf` / `.otf` 文件（by @Luna5ama，关闭 #1240）
+- 新增 Codex 订阅配额面板：在模型选择器中显示 ChatGPT Plus/Pro 配额，双来源拉取（会话消息 + ChatGPT API），快照缓存，API 密钥模式专属提示（by @Luna5ama）
+- 新增 Shift+Esc 快捷键隐藏 CCG 工具窗口面板（通过 JBCefJSQuery 在 JS 层拦截，绕过 JCEF 原生键盘消费）（by @Cyber0xFE）
+- Ctrl+Alt+K 无论是否有代码选择均可打开 CCG 面板，激活时自动聚焦输入框（by @Cyber0xFE）
+- 每条消息底部新增 Token 消耗指示器，显示整轮聚合输入/输出 Token 数（by @suzhelan，@zkpaiminmin 优化）
+- 新增 SDK 会话转换为 CLI 会话：通过 SDK 创建的会话（sdk-cli / claude-vscode 入口）可转换为 CLI 会话，出现在 `/resume` 列表；历史列表显示入口徽章和「转换为 CLI」操作（by @gadfly3173）
+- 新增 Claude Fable 5 模型支持（Mythos 级），添加 Fable 5 定价（输入 $10/1M，输出 $50/1M）（by @zkpaiminmin）
+- 集成 Claude Code Task tracking API（TaskCreate / TaskUpdate / TaskGet / TaskList）：任务管理工具渲染为可折叠 Agent 分组，内含嵌套工具调用，展开/折叠状态持久化；StatusPanel 任务列表同时支持旧版 `todowrite` 和新 Task API（by @gadfly3173，@zhuzhihang 共同开发）
+
+🐛 修复
+- 修复 WSL2 全套兼容性问题：Claude SDK 安装到 WSL 文件系统；处理原始路径和正斜杠 UNC WSL 路径；通过 WSLENV 跨 Windows→WSL 边界传播权限环境变量；合并（而非替换）登录 Shell PATH，保留 Homebrew/pyenv/sdkman；路径处理迁移到 `WslPathUtil`；会话转换时按需解析 Claude home（by @Gazoon007）
+- 修复工具 spinner 在流结束后永久卡住：rAF 批量更新取消时保存待处理快照中的 `tool_result`；将恢复逻辑从 assistant-patch 分支解耦（by @Cyber0xFE，@zkpaiminmin 加固）
+- 修复代码片段在前端未就绪时被发送：用 `PendingCodeSnippetBuffer`（AtomicReference）替代重试机制，消除竞态（by @Cyber0xFE，@zkpaiminmin 重构）
+- 修复使用量统计高估：按 `message.id` 去重 JSONL 记录（每个内容块独立写行导致约 2× 膨胀）；将 Opus 4.5/4.6/4.7/4.8 定价从 $15/$75 修正为 $5/$25 /1M（by @t7r5fz7848-lab，@zkpaiminmin 重新适配）
+- 修复 Bash 输出代码字体未生效：`.bash-output-text` 叶子节点被全局 `*` 选择器覆盖，直接在叶子声明 `font-family`（by @zkpaiminmin）
+- 修复 settings.json 环境变量静默覆盖推理力度、`MAX_THINKING_TOKENS` 和 1M 上下文切换：从 daemon 和 CLI 子进程环境剥离相关变量；注入行内 `--settings` 覆盖（by @gadfly3173）
+- 修复选择的推理力度未传递给 SDK：在 Claude 发送 payload 中携带 `reasoningEffort`；通过 `SessionHandler` → `ClaudeSession` → `SessionSendService` 串联（by @gadfly3173）
+- 修复 Codex 历史工具 UI 重启后消失：恢复会话时解包归一化历史 raw payload（by @Luna5ama）
+- 修复 Node 进程子菜单导致 webview 布局死循环（by @gadfly3173）
+- 修复 Codex 快速模式在普通模式下错误覆盖 service_tier（by @llanc）
+- 修复含空格/特殊字符的 Markdown 路径链接无法打开：打开前解码 percent-encoded 和 `file://` href（by @moritzfl）
+- 修复每条消息 Token 显示语义不一致：对话轮次完成时填入 `turnUsage` 整轮聚合值，tooltip 分解全部四个值（by @zkpaiminmin）
+- 修复切换 Codex 账户时订阅配额缓存未失效（by @zkpaiminmin）
+- 修复 API 密钥模式下 Codex 配额显示错误账户数据，跳过 OAuth 配额查询（by @zkpaiminmin）
+- 修复流结束快照恢复中 `tool_result` 重复；对齐 `[tool_result]` 标记 trim 处理（by @zkpaiminmin）
+- 修复历史消息归一化封装时命令消息泄漏到显示（by @zkpaiminmin）
+- 修复 Claude CLI 路径验证失败时输入框被清空（by @zkpaiminmin）
+- 修复历史回放后 Agent 分组吸收错误子节点：改为纯结构化规则；`extractAccumulatedTasks` 单遍处理加并行 TaskCreate ID 冲突守卫（by @zkpaiminmin）
+- 修复原生 POSIX 上项目边界检查未解析软链接的逃逸问题，限制词法回退仅用于 WSL（安全）（by @zkpaiminmin）
+- 修复控制字符混淆 `href` XSS（如 `java&#9;script:`），在 DOMPurify hook 的 scheme 检查前拒绝含 C0 控制字符的 href（安全）（by @zkpaiminmin）
+
+🔧 改进
+- 为 Bash 输出渲染引入专用 CSS 类，改善语法区分度（by @Luna5ama）
+- 改进 Codex 配额拉取：双来源、带超时快照缓存、复用单个 `HttpClient`、unwrap `CompletionException`（by @Luna5ama，@zkpaiminmin）
+- 将环境变量拆分为 `MODEL_ROUTING_ENV_VARS` 和 `REASONING_CONTROL_ENV_VARS`，防止独立漂移（by @gadfly3173）
+- 新增 Docker 构建支持（`Dockerfile` + `.dockerignore`），无需本地工具链可复现发布包（by @senfix）
+- StatusPanel TodoList 中将 emoji 阻断标记替换为 `codicon-circle-slash`（by @zkpaiminmin）
+
+---
+
 ##### **2026年5月29日（v0.4.4）**
 
 English:

@@ -93,6 +93,151 @@ export function getCliUserAgent() {
   return `claude-cli/${version} (${userType}, ${entrypoint})`;
 }
 
+// Cloud-provider routing switches in settings.json. When any of these is
+// enabled, the user's settings.json — not the plugin — owns inference routing,
+// so the plugin must NOT advertise host-managed provider control (see
+// shouldHostManageProvider / buildCliEnv).
+const CLOUD_PROVIDER_FLAGS = [
+  'CLAUDE_CODE_USE_BEDROCK',
+  'CLAUDE_CODE_USE_VERTEX',
+  'CLAUDE_CODE_USE_FOUNDRY',
+];
+
+/**
+ * Whether a settings.json env flag is enabled.
+ *
+ * Claude Code reads these switches from both JSON booleans and stringified
+ * truthy values ("1"/"true"), so this normalizes every accepted spelling in one
+ * place. Shared by auth detection (setupApiKey) and provider-management gating
+ * (shouldHostManageProvider) so the two can never disagree on what "enabled"
+ * means.
+ *
+ * @param {*} value - Raw value from settings.json env.
+ * @returns {boolean} true for any accepted truthy spelling.
+ */
+function isEnvFlagEnabled(value) {
+  return value === '1' || value === 1 || value === 'true' || value === true;
+}
+
+// Env vars whose value the webview owns per request. Settings.json copies of
+// these must never be applied on top of the current request's selections.
+//
+// Model routing: chosen by the webview model selector and written to
+// process.env by setModelEnvironmentVariables() each turn.
+const MODEL_ROUTING_ENV_VARS = [
+  'ANTHROPIC_MODEL',
+  'ANTHROPIC_DEFAULT_OPUS_MODEL',
+  'ANTHROPIC_DEFAULT_SONNET_MODEL',
+  'ANTHROPIC_DEFAULT_HAIKU_MODEL',
+  'ANTHROPIC_SMALL_FAST_MODEL',
+  'CLAUDE_CODE_SUBAGENT_MODEL',
+];
+
+// Reasoning / context controls: explicit SDK options in this bridge. Claude Code
+// gives env vars higher priority than SDK args, so stale settings values must be
+// neutralized — stripped from the child env (buildCliEnv) and overridden inline
+// (buildWebviewControlledSettingsOverride). The 1M flag is set per request from
+// the selected model.
+const REASONING_CONTROL_ENV_VARS = [
+  'CLAUDE_CODE_EFFORT_LEVEL',
+  'MAX_THINKING_TOKENS',
+  'CLAUDE_CODE_DISABLE_1M_CONTEXT',
+];
+
+export const WEBVIEW_CONTROLLED_ENV_VARS = Object.freeze([
+  ...MODEL_ROUTING_ENV_VARS,
+  ...REASONING_CONTROL_ENV_VARS,
+]);
+
+const WEBVIEW_CONTROLLED_ENV_VAR_SET = new Set(
+  WEBVIEW_CONTROLLED_ENV_VARS.map((varName) => varName.toUpperCase())
+);
+
+// Subset stripped from the SDK child env: the reasoning/context controls must
+// reach the CLI only via SDK options + the inline settings override, never
+// inherited from process.env.
+const CLI_ENV_OVERRIDE_VAR_SET = new Set(
+  REASONING_CONTROL_ENV_VARS.map((varName) => varName.toUpperCase())
+);
+
+export function isWebviewControlledEnvVar(varName) {
+  return WEBVIEW_CONTROLLED_ENV_VAR_SET.has(String(varName ?? '').toUpperCase());
+}
+
+// Security (C): environment variables that can hijack process startup or load arbitrary
+// native/JS code. These must NEVER be accepted from request params / settings.json env,
+// otherwise a malicious project's .claude/settings.json {env:{NODE_OPTIONS:'--require ...'}}
+// would achieve code execution in the daemon or any child process the SDK spawns.
+// NOTE: PATH is intentionally NOT listed — the daemon's legitimate PATH is supplied by the
+// Java EnvironmentConfigurator, and blanket-rejecting PATH would risk breaking it.
+const DANGEROUS_ENV_VAR_SET = new Set([
+  'NODE_OPTIONS',
+  'NODE_REPL_EXTERNAL_MODULE',
+  'NODE_EXTRA_CA_CERTS',
+  'ELECTRON_RUN_AS_NODE',
+  'LD_PRELOAD',
+  'LD_LIBRARY_PATH',
+  'LD_AUDIT',
+  'DYLD_INSERT_LIBRARIES',
+  'DYLD_LIBRARY_PATH',
+  'DYLD_FRAMEWORK_PATH',
+  'BASH_ENV',
+  'ENV',
+  'PERL5LIB',
+  'PYTHONPATH',
+  'PYTHONSTARTUP',
+  'GIT_SSH_COMMAND',
+  'GIT_EXTERNAL_DIFF',
+]);
+
+export function isDangerousEnvVar(varName) {
+  return DANGEROUS_ENV_VAR_SET.has(String(varName ?? '').toUpperCase());
+}
+
+export function buildWebviewControlledSettingsOverride(modelId) {
+  const env = {
+    // Empty strings intentionally override settings.json env values while
+    // evaluating as "not set" in Claude Code's env-precedence checks.
+    CLAUDE_CODE_EFFORT_LEVEL: '',
+    MAX_THINKING_TOKENS: '',
+  };
+
+  const normalizedModel = typeof modelId === 'string' ? modelId.trim() : '';
+  if (normalizedModel) {
+    env.CLAUDE_CODE_DISABLE_1M_CONTEXT = /\[1m\]$/i.test(normalizedModel) ? '' : '1';
+  }
+
+  return { env };
+}
+
+/**
+ * Whether the host should hand off provider routing to Claude Code itself.
+ *
+ * When truthy, the CLI strips provider/model routing vars (CLAUDE_CODE_USE_BEDROCK,
+ * ANTHROPIC_*_BASE_URL, ANTHROPIC_API_KEY/AUTH_TOKEN, …) from every settings
+ * source, so a user's ~/.claude/settings.json cannot redirect requests away
+ * from the host-configured provider. That is exactly what we want when the
+ * plugin owns the API key and base URL.
+ *
+ * It is NOT what we want for cloud-provider auth (Bedrock/Vertex/Foundry):
+ * there the user's settings.json IS the source of truth for
+ * CLAUDE_CODE_USE_BEDROCK and its peers. Setting the flag there would make the
+ * CLI silently drop the very switch that turns Bedrock on → 403.
+ *
+ * The plugin's "host" role is conditional on who actually holds the
+ * credentials — for cloud providers that owner is AWS/GCP/Azure, so the plugin
+ * must step back and let Claude Code honor the user's settings.json switch.
+ *
+ * Reads settings via loadClaudeSettings() (same source as setupApiKey) so the
+ * auth-decision and the provider-management-decision always see the same env.
+ *
+ * @returns {boolean} true unless a cloud provider switch is active in settings.
+ */
+function shouldHostManageProvider() {
+  const settings = loadClaudeSettings();
+  return !CLOUD_PROVIDER_FLAGS.some((flag) => isEnvFlagEnabled(settings?.env?.[flag]));
+}
+
 /**
  * Build a clean env object for SDK child processes that identifies as CLI.
  *
@@ -103,12 +248,32 @@ export function getCliUserAgent() {
  * @returns {Object} Environment variables object for options.env
  */
 export function buildCliEnv() {
-  const env = {
-    ...process.env,
-    CLAUDE_CODE_ENTRYPOINT: 'cli',
-    USER_TYPE: 'external',
-  };
-  delete env.CLAUDE_AGENT_SDK_VERSION;
+  const env = {};
+  // When a cloud provider owns routing, the host must NOT advertise provider
+  // management: otherwise Claude Code strips CLAUDE_CODE_USE_BEDROCK (and
+  // peers) from settings → 403. We skip setting it AND drop any copy inherited
+  // from this process's own env (the daemon may itself have been spawned under
+  // the flag, e.g. when run from inside another Claude Code host).
+  const hostManaged = shouldHostManageProvider();
+  const skipKeys = new Set([...CLI_ENV_OVERRIDE_VAR_SET, 'CLAUDE_AGENT_SDK_VERSION']);
+  if (!hostManaged) {
+    skipKeys.add('CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST');
+  }
+  for (const [key, value] of Object.entries(process.env)) {
+    if (!skipKeys.has(key.toUpperCase())) {
+      env[key] = value;
+    }
+  }
+  env.CLAUDE_CODE_ENTRYPOINT = 'cli';
+  env.USER_TYPE = 'external';
+  // Claude Code applies settings.json env with overwrite semantics. This flag
+  // makes the CLI strip settings-sourced provider/model vars so the host's
+  // request-scoped routing wins — but only when the plugin owns routing. For
+  // cloud-provider modes (Bedrock/Vertex/Foundry) the CLI must honor the
+  // user's settings.json switch, so we leave the flag unset there.
+  if (hostManaged) {
+    env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST = '1';
+  }
   return env;
 }
 
@@ -128,39 +293,48 @@ export function configureCliIdentity() {
 }
 
 // ============================================================================
-// Network Environment Variables
+// Startup Environment Variables
 // ============================================================================
 
 /**
- * Network-related environment variable names that should be injected from
- * settings.json into process.env early at startup.
+ * Environment variable names that should be injected from settings.json into
+ * process.env early at startup.
  *
- * IDEs launched via desktop launcher don't inherit shell proxy configuration,
- * so we need to explicitly read and set them from settings.json.
+ * IDEs launched from a desktop launcher (macOS Dock, Windows Start Menu,
+ * Linux app launcher) do NOT inherit the user's shell environment. Variables
+ * configured in settings.json therefore never reach process.env, causing
+ * Bedrock auth and proxy/TLS settings to silently fail. Reading them here
+ * ensures every subprocess the daemon spawns (the claude binary, MCP servers,
+ * Bash tool, etc.) sees the correct env.
  *
  * For corporate SSL-inspection proxies, prefer NODE_EXTRA_CA_CERTS (path to
  * a PEM bundle) over NODE_TLS_REJECT_UNAUTHORIZED=0 — the former adds custom
  * CAs while keeping verification intact; the latter disables ALL verification.
  */
-const NETWORK_ENV_VARS = [
+const STARTUP_ENV_VARS = [
+  // Proxy and TLS
   'HTTP_PROXY', 'HTTPS_PROXY', 'NO_PROXY',
   'http_proxy', 'https_proxy', 'no_proxy',
   'NODE_EXTRA_CA_CERTS',
   'NODE_TLS_REJECT_UNAUTHORIZED',
+  // AWS credentials — required for Bedrock auth when the IDE is desktop-launched
+  'AWS_PROFILE', 'AWS_DEFAULT_PROFILE',
+  'AWS_REGION', 'AWS_DEFAULT_REGION',
+  'AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AWS_SESSION_TOKEN',
 ];
 
 const LOCAL_SETTINGS_PROVIDER_ID = '__local_settings_json__';
 const CLI_LOGIN_PROVIDER_ID = '__cli_login__';
 const CODEX_CLI_LOGIN_PROVIDER_ID = '__codex_cli_login__';
-const injectedNetworkEnvVars = new Map();
+const injectedStartupEnvVars = new Map();
 
-function clearInjectedNetworkEnvVars() {
-  for (const [varName, injectedValue] of injectedNetworkEnvVars.entries()) {
+function clearInjectedStartupEnvVars() {
+  for (const [varName, injectedValue] of injectedStartupEnvVars.entries()) {
     if (process.env[varName] === injectedValue) {
       delete process.env[varName];
     }
   }
-  injectedNetworkEnvVars.clear();
+  injectedStartupEnvVars.clear();
 }
 
 function clearRuntimeAuthEnv() {
@@ -243,17 +417,18 @@ function canReadClaudeSettings(runtimeState) {
   return runtimeState.access !== 'inactive';
 }
 
-function canUseLocalProxySettings(runtimeState) {
+function canUseLocalSettingsEnv(runtimeState) {
   return runtimeState.access === 'local' || runtimeState.access === 'cli_login';
 }
 
 /**
- * Inject network-related environment variables from settings.json into process.env.
+ * Inject environment variables from settings.json into process.env.
  *
- * This includes proxy settings AND TLS configuration. It must be called as early
- * as possible in every Node.js entry point — before any HTTPS connection is made
- * (including SDK preloading) — so that authorized Local settings / CLI Login
- * modes can use corporate proxies and custom CA setups safely.
+ * This covers proxy/TLS configuration and AWS credentials for Bedrock. It must
+ * be called as early as possible in every Node.js entry point — before any
+ * HTTPS connection is made (including SDK preloading) — so that authorized
+ * Local settings / CLI Login modes can use corporate proxies, custom CA
+ * setups, and Bedrock credentials safely.
  *
  * Users behind corporate SSL-inspection proxies should prefer setting:
  *   { "env": { "NODE_EXTRA_CA_CERTS": "/path/to/ca-bundle.pem" } }
@@ -263,17 +438,17 @@ function canUseLocalProxySettings(runtimeState) {
  *
  * @param {Object} [settings] - Parsed settings object. If omitted, loads from disk.
  */
-export function injectNetworkEnvVars(settings) {
+export function injectStartupEnvVars(settings) {
   const runtimeState = getClaudeRuntimeState();
-  clearInjectedNetworkEnvVars();
+  clearInjectedStartupEnvVars();
 
-  if (!canUseLocalProxySettings(runtimeState)) {
-    debugLog('[DEBUG] Skipping local proxy/TLS env sync for provider mode:', runtimeState.access);
+  if (!canUseLocalSettingsEnv(runtimeState)) {
+    debugLog('[DEBUG] Skipping settings.json env sync for provider mode:', runtimeState.access);
     return;
   }
 
   const resolvedSettings = settings || readClaudeSettingsFromDisk();
-  for (const varName of NETWORK_ENV_VARS) {
+  for (const varName of STARTUP_ENV_VARS) {
     const value = resolvedSettings?.env?.[varName];
     if (value === undefined || value === null || process.env[varName]) {
       continue;
@@ -291,7 +466,7 @@ export function injectNetworkEnvVars(settings) {
 
     const stringValue = String(value);
     process.env[varName] = stringValue;
-    injectedNetworkEnvVars.set(varName, stringValue);
+    injectedStartupEnvVars.set(varName, stringValue);
     debugLog(`[DEBUG] Set ${varName} from settings.json`);
 
     if (varName === 'NODE_TLS_REJECT_UNAUTHORIZED' && String(value) === '0') {
@@ -341,7 +516,7 @@ export function loadClaudeSettings() {
 export function setupApiKey() {
   const runtimeState = getClaudeRuntimeState();
   const settings = loadClaudeSettings();
-  injectNetworkEnvVars(settings);
+  injectStartupEnvVars(settings);
   clearRuntimeAuthEnv();
 
   let apiKey;
@@ -393,7 +568,7 @@ export function setupApiKey() {
     apiKey = settings.env.ANTHROPIC_API_KEY;
     authType = 'api_key';  // x-api-key authentication
     apiKeySource = 'settings.json (ANTHROPIC_API_KEY)';
-  } else if (settings?.env?.CLAUDE_CODE_USE_BEDROCK === '1' || settings?.env?.CLAUDE_CODE_USE_BEDROCK === 1 || settings?.env?.CLAUDE_CODE_USE_BEDROCK === 'true' || settings?.env?.CLAUDE_CODE_USE_BEDROCK === true) {
+  } else if (isEnvFlagEnabled(settings?.env?.CLAUDE_CODE_USE_BEDROCK)) {
     apiKey = settings?.env?.CLAUDE_CODE_USE_BEDROCK;
     authType = 'aws_bedrock';  // AWS Bedrock authentication
     apiKeySource = 'settings.json (AWS_BEDROCK)';

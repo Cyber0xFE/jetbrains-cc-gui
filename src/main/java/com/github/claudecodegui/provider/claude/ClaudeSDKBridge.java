@@ -2,6 +2,7 @@ package com.github.claudecodegui.provider.claude;
 
 import com.google.gson.JsonObject;
 
+import com.github.claudecodegui.bridge.NodeDetector;
 import com.github.claudecodegui.session.ClaudeSession;
 import com.github.claudecodegui.model.NodeDetectionResult;
 import com.github.claudecodegui.provider.common.BaseSDKBridge;
@@ -113,7 +114,7 @@ public class ClaudeSDKBridge extends BaseSDKBridge {
      * Prewarm daemon asynchronously to reduce first-message latency.
      */
     public void prewarmDaemonAsync(String cwd, String runtimeSessionEpoch) {
-        daemonCoordinator.prewarmDaemonAsync(cwd, runtimeSessionEpoch, null);
+        daemonCoordinator.prewarmDaemonAsync(normalizeCwdForNode(cwd), runtimeSessionEpoch, null);
     }
 
     /**
@@ -125,7 +126,7 @@ public class ClaudeSDKBridge extends BaseSDKBridge {
      * @param sessionId The historical session ID to resume
      */
     public void prewarmDaemonAsync(String cwd, String runtimeSessionEpoch, String sessionId) {
-        daemonCoordinator.prewarmDaemonAsync(cwd, runtimeSessionEpoch, sessionId);
+        daemonCoordinator.prewarmDaemonAsync(normalizeCwdForNode(cwd), runtimeSessionEpoch, sessionId);
     }
 
     public void resetPersistentRuntime(String runtimeSessionEpoch) {
@@ -402,10 +403,12 @@ public class ClaudeSDKBridge extends BaseSDKBridge {
             String reasoningEffort,
             MessageCallback callback
     ) {
+        String normalizedCwd = normalizeCwdForNode(cwd);
+
         // Try daemon mode first (avoids per-request Node.js process spawning)
         DaemonBridge db = daemonCoordinator.getDaemonBridge();
         if (db != null) {
-            return sendMessageViaDaemon(db, channelId, message, sessionId, runtimeSessionEpoch, cwd,
+            return sendMessageViaDaemon(db, channelId, message, sessionId, runtimeSessionEpoch, normalizedCwd,
                     attachments, permissionMode, model, openedFiles, agentPrompt,
                     streaming, disableThinking, reasoningEffort, callback);
         }
@@ -417,7 +420,7 @@ public class ClaudeSDKBridge extends BaseSDKBridge {
                 message,
                 sessionId,
                 runtimeSessionEpoch,
-                cwd,
+                normalizedCwd,
                 attachments,
                 permissionMode,
                 model,
@@ -445,14 +448,21 @@ public class ClaudeSDKBridge extends BaseSDKBridge {
      * Get MCP server connection status.
      */
     public CompletableFuture<List<JsonObject>> getMcpServerStatus(String cwd) {
-        return mcpQueryService.getMcpServerStatus(cwd);
+        return mcpQueryService.getMcpServerStatus(normalizeCwdForNode(cwd));
     }
 
     /**
      * Get MCP server tools list.
      */
     public CompletableFuture<JsonObject> getMcpServerTools(String serverId) {
-        return mcpQueryService.getMcpServerTools(serverId);
+        return mcpQueryService.getMcpServerTools(serverId, null);
+    }
+
+    /**
+     * Get MCP server tools list with working directory for project-specific config resolution.
+     */
+    public CompletableFuture<JsonObject> getMcpServerTools(String serverId, String cwd) {
+        return mcpQueryService.getMcpServerTools(serverId, normalizeCwdForNode(cwd));
     }
 
     // ============================================================================
@@ -582,6 +592,103 @@ public class ClaudeSDKBridge extends BaseSDKBridge {
         });
     }
 
+    /**
+     * Hot-swap the permission mode of the live daemon runtime mid-conversation.
+     *
+     * Pushes the new mode to the SDK query and the reactive state the PreToolUse
+     * hook reads, so subsequent tool calls in the current turn honor it
+     * immediately instead of waiting for the next user message.
+     *
+     * Fire-and-forget with a short guard timeout: when no daemon or no live
+     * runtime is present this is a graceful no-op, and the next send_message
+     * already carries the mode via the request payload.
+     *
+     * @param sessionId           The session whose runtime should be updated.
+     * @param runtimeSessionEpoch The runtime epoch for logging/diagnostics (optional).
+     * @param permissionMode      The normalized permission mode to apply.
+     */
+    public CompletableFuture<JsonObject> setPermissionModeLive(
+            String sessionId, String runtimeSessionEpoch, String permissionMode) {
+        // Use the non-spawning accessor: this is a best-effort push to whatever
+        // daemon is already running. Spawning a fresh daemon here would block the
+        // JCEF message thread and serve no purpose — a freshly started daemon has
+        // no live runtime, so setPermissionModePersistent would be a no-op anyway.
+        DaemonBridge db = this.daemonCoordinator.getCurrentDaemonBridge();
+        if (db == null || !db.isAlive()) {
+            JsonObject skipped = new JsonObject();
+            skipped.addProperty("success", true);
+            skipped.addProperty("applied", false);
+            skipped.addProperty("reason", "no-daemon");
+            return CompletableFuture.completedFuture(skipped);
+        }
+
+        JsonObject params = new JsonObject();
+        if (sessionId != null && !sessionId.isEmpty()) {
+            params.addProperty("sessionId", sessionId);
+        }
+        if (runtimeSessionEpoch != null && !runtimeSessionEpoch.isEmpty()) {
+            params.addProperty("runtimeSessionEpoch", runtimeSessionEpoch);
+        }
+        if (permissionMode != null && !permissionMode.isEmpty()) {
+            params.addProperty("permissionMode", permissionMode);
+        }
+
+        CompletableFuture<JsonObject> resultFuture = new CompletableFuture<>();
+
+        // The setPermissionMode path only emits a {id, done, success} signal —
+        // no streaming line output — so onLine is never invoked; we complete
+        // purely from onComplete/onError.
+        DaemonBridge.DaemonOutputCallback callback = new DaemonBridge.DaemonOutputCallback() {
+            @Override
+            public void onLine(String line) { }
+            @Override
+            public void onStderr(String text) { }
+            @Override
+            public void onError(String error) {
+                if (!resultFuture.isDone()) {
+                    JsonObject err = new JsonObject();
+                    err.addProperty("success", false);
+                    err.addProperty("error", error);
+                    resultFuture.complete(err);
+                }
+            }
+            @Override
+            public void onComplete(boolean success) {
+                if (!resultFuture.isDone()) {
+                    JsonObject ok = new JsonObject();
+                    ok.addProperty("success", success);
+                    resultFuture.complete(ok);
+                }
+            }
+        };
+
+        try {
+            CompletableFuture<Boolean> commandFuture = db.sendCommand("claude.setPermissionMode", params, callback);
+            commandFuture.exceptionally(ex -> {
+                if (!resultFuture.isDone()) {
+                    JsonObject err = new JsonObject();
+                    err.addProperty("success", false);
+                    err.addProperty("error", ex.getMessage());
+                    resultFuture.complete(err);
+                }
+                return false;
+            });
+        } catch (Exception e) {
+            LOG.error("[ClaudeSDKBridge] setPermissionModeLive failed: " + e.getMessage(), e);
+            JsonObject err = new JsonObject();
+            err.addProperty("success", false);
+            err.addProperty("error", e.getMessage());
+            return CompletableFuture.completedFuture(err);
+        }
+
+        return resultFuture.orTimeout(10, TimeUnit.SECONDS).exceptionally(ex -> {
+            JsonObject err = new JsonObject();
+            err.addProperty("success", false);
+            err.addProperty("error", "setPermissionMode timed out after 10 seconds");
+            return err;
+        });
+    }
+
     // ============================================================================
     // Daemon mode message sending
     // ============================================================================
@@ -624,5 +731,24 @@ public class ClaudeSDKBridge extends BaseSDKBridge {
                 reasoningEffort,
                 callback
         );
+    }
+
+    /**
+     * Converts a Windows-style cwd to a WSL path when the active node executable is a WSL binary.
+     * On non-WSL setups this is a no-op.
+     */
+    private String normalizeCwdForNode(String cwd) {
+        if (cwd == null || cwd.isEmpty()) {
+            LOG.info("[ClaudeSDKBridge.normalizeCwdForNode] cwd is null/empty, no-op");
+            return cwd;
+        }
+        String nodePath = nodeDetector.getCachedNodePath();
+        boolean isWsl = nodePath != null && NodeDetector.isWslPath(nodePath);
+        String result = isWsl ? NodeDetector.convertToWslPath(cwd) : cwd;
+        LOG.info("[ClaudeSDKBridge.normalizeCwdForNode] cwd=" + cwd
+                + " nodePath=" + nodePath
+                + " isWsl=" + isWsl
+                + " result=" + result);
+        return result;
     }
 }

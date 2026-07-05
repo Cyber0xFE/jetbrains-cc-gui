@@ -27,6 +27,7 @@ import java.util.regex.Pattern;
 public class SessionSendService {
 
     private static final Logger LOG = Logger.getInstance(SessionSendService.class);
+    public static final String CODEX_FAST_SERVICE_TIER = "fast";
 
     private final Project project;
     private final SessionState state;
@@ -93,7 +94,9 @@ public class SessionSendService {
             JsonObject openedFilesJson,
             String externalAgentPrompt,
             List<String> fileTagPaths,
-            String requestedPermissionMode
+            String requestedPermissionMode,
+            String requestedReasoningEffort,
+            String requestedCodexFastMode
     ) {
         saveReferencedFiles(input);
 
@@ -121,7 +124,13 @@ public class SessionSendService {
                         + ", effective=" + effectivePermissionMode
         );
 
+        String normalizedRequestedEffort = normalizeRequestedReasoningEffort(requestedReasoningEffort);
+
         if ("codex".equals(currentProvider)) {
+            String effectiveCodexServiceTier = resolveEffectiveCodexServiceTier(
+                    requestedCodexFastMode,
+                    state.getCodexServiceTier()
+            );
             return sendToCodex(
                     channelId,
                     input,
@@ -129,11 +138,29 @@ public class SessionSendService {
                     openedFilesJson,
                     agentPrompt,
                     fileTagPaths,
-                    effectivePermissionMode
+                    effectivePermissionMode,
+                    normalizedRequestedEffort,
+                    effectiveCodexServiceTier
             );
         }
 
-        return sendToClaude(channelId, input, attachments, openedFilesJson, agentPrompt, effectivePermissionMode);
+        return sendToClaude(channelId, input, attachments, openedFilesJson, agentPrompt,
+                effectivePermissionMode, normalizedRequestedEffort);
+    }
+
+    public static String normalizeRequestedReasoningEffort(String effort) {
+        if (effort == null) {
+            return null;
+        }
+        String trimmed = effort.trim();
+        if (trimmed.isEmpty()) {
+            return null;
+        }
+        if (SessionState.isValidReasoningEffort(trimmed)) {
+            return trimmed;
+        }
+        LOG.warn("[ReasoningEffort][Backend] Invalid requested reasoningEffort ignored: " + effort);
+        return null;
     }
 
     public static String normalizeRequestedPermissionMode(String mode) {
@@ -174,6 +201,51 @@ public class SessionSendService {
         return ClaudeCodeGuiBundle.message("error.codexLocalAccessNotAuthorized");
     }
 
+    public static String normalizeRequestedCodexServiceTier(String value) {
+        if (value == null) {
+            return null;
+        }
+        String trimmed = value.trim();
+        if (trimmed.isEmpty()) {
+            return null;
+        }
+        if ("fast".equalsIgnoreCase(trimmed) || "priority".equalsIgnoreCase(trimmed)) {
+            return CODEX_FAST_SERVICE_TIER;
+        }
+        if ("normal".equalsIgnoreCase(trimmed)
+                || "standard".equalsIgnoreCase(trimmed)
+                || "default".equalsIgnoreCase(trimmed)
+                || "none".equalsIgnoreCase(trimmed)) {
+            return null;
+        }
+        LOG.warn("[Codex] Invalid fast mode/service tier ignored: " + value);
+        return null;
+    }
+
+    public static String resolveEffectiveCodexServiceTier(String requestedValue, String sessionValue) {
+        String requested = normalizeRequestedCodexServiceTier(requestedValue);
+        if (requested != null) {
+            return requested;
+        }
+        if (isExplicitCodexStandardMode(requestedValue)) {
+            return null;
+        }
+
+        String session = normalizeRequestedCodexServiceTier(sessionValue);
+        return session;
+    }
+
+    public static boolean isExplicitCodexStandardMode(String value) {
+        if (value == null) {
+            return false;
+        }
+        String trimmed = value.trim();
+        return "normal".equalsIgnoreCase(trimmed)
+                || "standard".equalsIgnoreCase(trimmed)
+                || "default".equalsIgnoreCase(trimmed)
+                || "none".equalsIgnoreCase(trimmed);
+    }
+
     private CompletableFuture<Void> sendToCodex(
             String channelId,
             String input,
@@ -181,7 +253,9 @@ public class SessionSendService {
             JsonObject openedFilesJson,
             String agentPrompt,
             List<String> fileTagPaths,
-            String effectivePermissionMode
+            String effectivePermissionMode,
+            String requestedReasoningEffort,
+            String effectiveCodexServiceTier
     ) {
         CodexMessageHandler handler = new CodexMessageHandler(state, callbackFacade.getCallbackHandler());
         String accessMode = CodemossSettingsService.CODEX_RUNTIME_ACCESS_INACTIVE;
@@ -209,7 +283,8 @@ public class SessionSendService {
                 effectivePermissionMode,
                 state.getModel(),
                 agentPrompt,
-                state.getReasoningEffort(),
+                requestedReasoningEffort != null ? requestedReasoningEffort : state.getReasoningEffort(),
+                effectiveCodexServiceTier,
                 handler
         ).thenApply(result -> null);
     }
@@ -220,7 +295,8 @@ public class SessionSendService {
             List<ClaudeSession.Attachment> attachments,
             JsonObject openedFilesJson,
             String agentPrompt,
-            String effectivePermissionMode
+            String effectivePermissionMode,
+            String requestedReasoningEffort
     ) {
         ClaudeMessageHandler handler = new ClaudeMessageHandler(
                 project,
@@ -252,7 +328,7 @@ public class SessionSendService {
                         agentPrompt,
                         streaming,
                         false,
-                        state.getReasoningEffort(),
+                        requestedReasoningEffort != null ? requestedReasoningEffort : state.getReasoningEffort(),
                         handler
                 ).thenApply(result -> null);
     }

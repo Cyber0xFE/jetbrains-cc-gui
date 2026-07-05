@@ -81,7 +81,10 @@
     "disabled": "已停用",
     "sdkNotInstalled": "{{provider}} SDK 尚未安装，请先安装 SDK 才能开始对话",
     "sdkStatusLoading": "正在检查 SDK 状态...",
-    "openSourceBanner": "本项目保证100%开源（谨防盗版项目）",
+    "openSourceBanner": "本项目保证100%开源和免费（谨防盗版项目）",
+    "openSourceBannerStar": "点个 Star",
+    "openSourceBannerStarToast": "已复制仓库地址到剪切板，复制到浏览器即可访问 ⭐",
+    "openSourceBannerStarAria": "复制仓库地址并前往 GitHub 点 Star",
     "goInstallSdk": "前往安装",
     "commandNotImplemented": "`{{command}}` 功能暂未实现。",
     "clearCommandDescription": "清除对话历史并新建会话",
@@ -91,6 +94,8 @@
     "streamingConnected": "{{provider}} 已成功连接，正在理解问题",
     "showEarlierMessages": "显示之前的 {{count}} 条消息",
     "totalDuration": "本次耗时",
+    "tokenUsage": "输入 {{input}} / 输出 {{output}}",
+    "tokenUsageDetail": "本轮合计 — 输入 {{input}} · 缓存写入 {{cacheWrite}} · 缓存读取 {{cacheRead}} · 输出 {{output}}",
     "search": {
       "ariaLabel": "在对话中搜索",
       "placeholder": "在对话中搜索…",
@@ -162,6 +167,11 @@
         "invalidFileName": "Windows 下路径必须以 node.exe 结尾，macOS/Linux 下必须以 node 结尾",
         "cannotExecute": "文件存在但无法执行，请检查文件权限"
       },
+      "claudeCliPath": {
+        "label": "Claude CLI 路径（覆盖）",
+        "placeholder": "例如 /usr/local/bin/claude — 留空则使用内置 SDK",
+        "hint": "可选。设置后，插件将启动此二进制文件，而非内置的 @anthropic-ai/claude-agent-sdk。保存时会重启守护进程。"
+      },
       "workingDirectory": {
         "label": "工作目录",
         "placeholder": "例如 project1 或留空使用项目根目录",
@@ -177,16 +187,28 @@
         "level6": "最大（140%）"
       },
       "editorFont": {
-        "label": "字体",
-        "hint": "这里修改的是插件界面字体；字号和行高仍跟随编辑器。",
-        "followOption": "跟随编辑器（{{font}}）",
-        "customOption": "自定义字体文件",
-        "customPathLabel": "字体文件路径",
-        "customPathPlaceholder": "选择或输入 .ttf / .otf 字体文件路径",
+        "label": "UI 字体",
+        "hint": "这里修改的是插件界面字体。代码可以使用单独的代码字体。",
+        "followOption": "跟随 IDEA UI 字体（{{font}}）",
+        "customOption": "自定义 UI 字体文件",
+        "customPathLabel": "UI 字体文件路径",
+        "customPathPlaceholder": "选择或输入 .ttf / .otf UI 字体文件路径",
         "browse": "浏览",
-        "warningUnavailable": "字体不可用，当前已回退到编辑器字体",
+        "warningUnavailable": "UI 字体不可用，当前已回退到 IDEA UI 字体",
+        "statusFollowEditor": "当前跟随 IDEA UI 字体：{{font}}",
+        "statusCustom": "当前使用自定义 UI 字体：{{font}}"
+      },
+      "codeFont": {
+        "label": "代码字体",
+        "hint": "Markdown 代码和命令块会使用这个字体。",
+        "followOption": "跟随编辑器字体（{{font}}）",
+        "customOption": "自定义代码字体文件",
+        "customPathLabel": "代码字体文件路径",
+        "customPathPlaceholder": "选择或输入 .ttf / .otf 代码字体文件路径",
+        "browse": "浏览",
+        "warningUnavailable": "代码字体不可用，当前已回退到编辑器字体",
         "statusFollowEditor": "当前跟随编辑器字体：{{font}}",
-        "statusCustom": "当前使用自定义字体：{{font}}"
+        "statusCustom": "当前使用自定义代码字体：{{font}}"
       },
       "streaming": {
         "label": "流式传输",
@@ -365,7 +387,7 @@
     "codexPermissionsDesc": "管理 Codex 的权限和沙箱策略",
     "permissionsPanel": {
       "codexSandboxTitle": "Codex 沙箱模式",
-      "codexSandboxDesc": "控制 Codex 执行命令时的系统权限边界。默认使用 danger-full-access，如需更严格的沙箱限制可切换为 workspace-write。",
+      "codexSandboxDesc": "控制 Codex 执行命令时的系统权限边界。默认使用更安全的 workspace-write（仅在工作区内读写），如需执行 adb、docker 等系统级命令可切换为 danger-full-access。",
       "workspaceWriteTitle": "workspace-write",
       "workspaceWriteDesc": "只允许在工作区内读写，系统级操作会被限制，更安全。",
       "fullAccessTitle": "danger-full-access",
@@ -726,50 +748,50 @@
       }
     },
     "agent": {
-      "title": "智能体",
+      "title": "提示词",
       "create": "创建",
       "export": "导出",
       "import": "导入",
-      "createAgent": "创建智能体",
-      "createAgentHint": "点击跳转到智能体设置页面进行创建",
-      "customAgents": "自定义智能体",
-      "noAgents": "暂无自定义智能体",
-      "noAgentsDropdown": "暂无智能体",
+      "createAgent": "创建提示词",
+      "createAgentHint": "点击跳转到提示词设置页面进行创建",
+      "customAgents": "自定义提示词",
+      "noAgents": "暂无自定义提示词",
+      "noAgentsDropdown": "暂无提示词",
       "loadFailed": "加载失败",
       "loading": "加载中...",
       "menu": "菜单",
-      "addSuccess": "智能体创建成功",
-      "updateSuccess": "智能体更新成功",
-      "deleteSuccess": "智能体删除成功",
+      "addSuccess": "提示词创建成功",
+      "updateSuccess": "提示词更新成功",
+      "deleteSuccess": "提示词删除成功",
       "operationSuccess": "操作成功",
       "operationFailed": "操作失败",
       "deleteConfirmTitle": "确认删除",
-      "deleteConfirmMessage": "确定要删除智能体 \"{{name}}\" 吗？此操作无法撤销。",
-      "clearAgent": "取消选择智能体",
+      "deleteConfirmMessage": "确定要删除提示词 \"{{name}}\" 吗？此操作无法撤销。",
+      "clearAgent": "取消选择提示词",
       "dialog": {
-        "addTitle": "创建智能体",
-        "editTitle": "编辑智能体",
+        "addTitle": "创建提示词",
+        "editTitle": "编辑提示词",
         "name": "名称",
-        "namePlaceholder": "请输入智能体名称",
-        "nameRequired": "请输入智能体名称",
+        "namePlaceholder": "请输入提示词名称",
+        "nameRequired": "请输入提示词名称",
         "prompt": "提示词",
-        "promptPlaceholder": "请输入智能体的角色、语气、工作流程、工具偏好及规则规范等。（选填）",
+        "promptPlaceholder": "请输入提示词的角色、语气、工作流程、工具偏好及规则规范等。（选填）",
         "promptHint": "提示词会在对话开始时作为系统指令发送给AI",
         "confirmAdd": "创建",
         "saveChanges": "保存"
       },
       "importDialog": {
-        "title": "导入智能体",
-        "selectItems": "选择要导入的智能体",
-        "summary": "共 {{total}} 个智能体：",
+        "title": "导入提示词",
+        "selectItems": "选择要导入的提示词",
+        "summary": "共 {{total}} 个提示词：",
         "newCount": "{{count}} 个新建",
         "updateCount": "{{count}} 个更新",
         "selectedCount": "已选择 {{count}} 项",
         "conflictStrategy": "冲突处理策略",
         "strategySkip": "跳过",
-        "strategySkipDesc": "跳过已存在的智能体",
+        "strategySkipDesc": "跳过已存在的提示词",
         "strategyOverwrite": "覆盖",
-        "strategyOverwriteDesc": "覆盖已存在的智能体",
+        "strategyOverwriteDesc": "覆盖已存在的提示词",
         "strategyDuplicate": "复制",
         "strategyDuplicateDesc": "创建副本（生成新ID）",
         "conflictWarning": "检测到 {{count}} 个冲突项",
@@ -778,19 +800,19 @@
         "columnStatus": "状态",
         "statusNew": "新建",
         "statusUpdate": "更新",
-        "importSuccess": "成功导入 {{count}} 个智能体",
+        "importSuccess": "成功导入 {{count}} 个提示词",
         "importFailed": "导入失败",
         "importPartialSuccess": "成功导入 {{imported}} 个，跳过 {{skipped}} 个，更新 {{updated}} 个",
-        "noItemsSelected": "请至少选择一个智能体",
+        "noItemsSelected": "请至少选择一个提示词",
         "confirmImport": "确认导入",
-        "exportSuccess": "智能体导出成功",
+        "exportSuccess": "提示词导出成功",
         "exportFailed": "导出失败",
         "importFileError": "文件读取失败",
         "invalidFileFormat": "无效的文件格式"
       },
       "exportDialog": {
-        "title": "导出智能体",
-        "selectHint": "选择要导出的智能体",
+        "title": "导出提示词",
+        "selectHint": "选择要导出的提示词",
         "confirmExport": "确认导出"
       }
     },
@@ -918,6 +940,32 @@
     "copySessionId": "复制会话ID用于CLI恢复",
     "sessionIdCopied": "会话ID已复制",
     "copyFailed": "复制失败",
+    "entrypointLabel": {
+      "sdk-cli": "SDK会话",
+      "claude-vscode": "VS Code",
+      "remote": "远程"
+    },
+    "entrypointTooltip": {
+      "sdk-cli": "此会话由插件通过 SDK 创建，CLI 默认不显示。点击「转为CLI」可使其出现在终端 CLI 的 /resume 列表中",
+      "claude-vscode": "此会话由 VS Code 插件创建，CLI 默认不显示。点击「转为CLI」可使其出现在终端 CLI 的 /resume 列表中",
+      "remote": "此会话由远程 Claude Code 实例创建"
+    },
+    "convertToCliSession": "转换为 CLI 可识别会话",
+    "convertButton": "转为CLI",
+    "convertSuccess": "会话已转换，现在可在 CLI 的 /resume 中显示",
+    "convertFailed": "转换失败",
+    "confirmConvert": "转换为 CLI 会话？",
+    "convertConfirmMessage": "此操作将修改会话的 entrypoint，使其在 Claude Code CLI 的 /resume 列表中显示。",
+    "conversionErrors": {
+      "INVALID_SESSION_ID": "无效的会话 ID",
+      "SESSION_ACTIVE": "无法转换当前活跃的会话，请先开启新会话后再转换",
+      "SESSION_NOT_FOUND": "未找到会话文件",
+      "FILE_NOT_EXIST": "会话文件不存在",
+      "FILE_LOCKED": "会话文件正在被其他进程访问",
+      "NOT_SDK_SESSION": "此会话不是 SDK 创建的会话（entrypoint 不是 sdk-cli）",
+      "ALREADY_CLI_SESSION": "此会话已经是 CLI 会话",
+      "CONVERSION_FAILED": "转换失败，请稍后重试"
+    },
     "timeAgo": {
       "yearsAgo": "年前",
       "monthsAgo": "个月前",
@@ -931,6 +979,7 @@
     "dialogTitle": "权限请求",
     "allow": "允许一次",
     "allowAlways": "总是允许",
+    "allowAlwaysCommand": "总是允许此命令",
     "deny": "拒绝",
     "userDenied": "用户拒绝了权限请求",
     "fromExternalProcess": "来自外部进程的请求",
@@ -1008,6 +1057,19 @@
       "loading": "正在加载供应商...",
       "empty": "暂无可用供应商",
       "switched": "已切换到 {{provider}}"
+    },
+    "codexQuota": {
+      "title": "Codex 配额",
+      "loading": "正在加载配额...",
+      "unavailable": "配额不可用",
+      "lastUpdated": "更新于 {{value}}",
+      "fiveHour": "5 小时用量",
+      "weekly": "每周用量",
+      "windowRemainingPercent": "剩余 {{percent}}%",
+      "windowRemainingPercentWithReset": "剩余 {{percent}}% · 重置于 {{value}}",
+      "windowUsedOnly": "已用 {{used}}",
+      "windowUnavailable": "不可用",
+      "apiKeyMode": "API key 模式无订阅配额"
     },
     "nodeProcesses": {
       "title": "Node 进程管理",
@@ -1254,6 +1316,8 @@
     "runCommand": "运行命令",
     "contextEngine": "上下文引擎",
     "task": "任务",
+    "agent": "智能体",
+    "agentGroupToggle": "展开/收起智能体详情",
     "promptLabel": "提示词 (Prompt)",
     "readFile": "读取文件",
     "editFile": "编辑文件",
@@ -1326,6 +1390,7 @@
     "noTodos": "暂无任务运行",
     "noSubagents": "暂无子代理运行",
     "noFileChanges": "暂无文件改动",
+    "blockedBy": "被阻塞: {{ids}}",
     "showDiff": "查看差异",
     "expand": "展开状态面板",
     "collapse": "收起状态面板",
@@ -1511,6 +1576,9 @@
   },
   "models": {
     "addModel": "添加模型",
+    "searchPlaceholder": "搜索模型",
+    "noModelsFound": "未找到模型",
+    "hiddenModelCount": "+ 还有 {{count}} 个模型。输入以搜索。",
     "longContext": {
       "label": "1M",
       "shortLabel": "1M上下文",
@@ -1537,6 +1605,10 @@
       "opus48": {
         "label": "Opus 4.8",
         "description": "Opus 4.8 · 最新最强大的模型"
+      },
+      "fable5": {
+        "label": "Fable 5",
+        "description": "Fable 5 · 最强大 · Mythos 级"
       }
     },
     "codex": {
@@ -1788,6 +1860,17 @@
     "title": "版本更新",
     "close": "知道了",
     "page": "{{current}} / {{total}}"
+  },
+  "codexFastMode": {
+    "title": "选择 Codex 速度模式",
+    "normal": {
+      "label": "标准",
+      "description": "Codex的默认响应速度"
+    },
+    "fast": {
+      "label": "Fast",
+      "description": "Codex快速响应模式（会产生额外消耗）"
+    }
   },
   "error": {
     "providerNotConfigured": "供应商未配置",

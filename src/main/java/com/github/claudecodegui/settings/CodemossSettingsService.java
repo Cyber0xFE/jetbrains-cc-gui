@@ -23,6 +23,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
+import java.nio.file.attribute.PosixFilePermissions;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -38,6 +39,10 @@ public class CodemossSettingsService {
     private static final String CODEX_SANDBOX_MODE_WORKSPACE_WRITE = "workspace-write";
     private static final String CODEX_SANDBOX_MODE_DANGER_FULL_ACCESS = "danger-full-access";
     private static final String UI_FONT_CONFIG_KEY = "uiFont";
+    private static final String CODE_FONT_CONFIG_KEY = "codeFont";
+    // Shared by both UI font and code font: the persisted JSON keys ("mode" /
+    // "customFontPath") and the set of valid modes are identical for the two font kinds,
+    // so they reuse these UI_FONT_*-named constants. They are NOT UI-only despite the name.
     private static final String UI_FONT_MODE_KEY = "mode";
     private static final String UI_FONT_CUSTOM_PATH_KEY = "customFontPath";
     private static final Set<String> VALID_UI_FONT_MODES = Set.of(
@@ -245,16 +250,33 @@ public class CodemossSettingsService {
             LOG.warn("[CodemossSettings] Failed to write config: " + e.getMessage());
             throw e;
         }
+        // Security (J): config.json holds provider API keys/tokens; restrict to 0600.
+        hardenFilePermissions(Paths.get(configPath));
     }
 
     private void backupConfig() {
         try {
             Path configPath = pathManager.getConfigFilePath();
             if (Files.exists(configPath)) {
-                Files.copy(configPath, Paths.get(pathManager.getBackupPath()), StandardCopyOption.REPLACE_EXISTING);
+                Path backupPath = Paths.get(pathManager.getBackupPath());
+                Files.copy(configPath, backupPath, StandardCopyOption.REPLACE_EXISTING);
+                // Security (J): the .bak copy also contains secrets; restrict to 0600.
+                hardenFilePermissions(backupPath);
             }
         } catch (Exception e) {
             LOG.warn("[CodemossSettings] Failed to backup config: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Best-effort restrict a file to owner read/write (0600). No-op on non-POSIX
+     * filesystems (e.g. Windows), where the per-user home directory ACL applies. (Security J)
+     */
+    private static void hardenFilePermissions(Path path) {
+        try {
+            Files.setPosixFilePermissions(path, PosixFilePermissions.fromString("rw-------"));
+        } catch (UnsupportedOperationException | IOException e) {
+            LOG.debug("[CodemossSettings] Could not set 0600 on " + path + ": " + e.getMessage());
         }
     }
 
@@ -506,6 +528,33 @@ public class CodemossSettingsService {
                 + ", customFontPath=" + customFontPath);
     }
 
+    /**
+     * Get persisted code font configuration.
+     *
+     * @return normalized code font configuration
+     */
+    public JsonObject getCodeFontConfig() throws IOException {
+        JsonObject config = readConfig();
+        if (!config.has(CODE_FONT_CONFIG_KEY) || !config.get(CODE_FONT_CONFIG_KEY).isJsonObject()) {
+            return createDefaultCodeFontConfig();
+        }
+        return normalizeCodeFontConfig(config.getAsJsonObject(CODE_FONT_CONFIG_KEY));
+    }
+
+    /**
+     * Persist code font configuration.
+     *
+     * @param mode requested mode
+     * @param customFontPath custom font path for custom file mode
+     */
+    public void setCodeFontConfig(String mode, String customFontPath) throws IOException {
+        JsonObject config = readConfig();
+        config.add(CODE_FONT_CONFIG_KEY, createCodeFontConfig(mode, customFontPath));
+        writeConfig(config);
+        LOG.debug("[CodemossSettings] Set code font config: mode=" + mode
+                + ", customFontPath=" + customFontPath);
+    }
+
     // ==================== Permission Dialog Timeout Config Management ====================
 
     public static final int DEFAULT_PERMISSION_DIALOG_TIMEOUT_SECONDS =
@@ -566,6 +615,12 @@ public class CodemossSettingsService {
         return uiFont;
     }
 
+    private JsonObject createDefaultCodeFontConfig() {
+        JsonObject codeFont = new JsonObject();
+        codeFont.addProperty(UI_FONT_MODE_KEY, FontConfigService.UI_FONT_MODE_FOLLOW_EDITOR);
+        return codeFont;
+    }
+
     private JsonObject normalizeUiFontConfig(JsonObject rawConfig) {
         if (rawConfig == null) {
             return createDefaultUiFontConfig();
@@ -593,6 +648,36 @@ public class CodemossSettingsService {
         }
 
         return uiFont;
+    }
+
+    private JsonObject normalizeCodeFontConfig(JsonObject rawConfig) {
+        if (rawConfig == null) {
+            return createDefaultCodeFontConfig();
+        }
+        String requestedMode = rawConfig.has(UI_FONT_MODE_KEY) && !rawConfig.get(UI_FONT_MODE_KEY).isJsonNull()
+                ? rawConfig.get(UI_FONT_MODE_KEY).getAsString()
+                : FontConfigService.UI_FONT_MODE_FOLLOW_EDITOR;
+        String customFontPath = rawConfig.has(UI_FONT_CUSTOM_PATH_KEY) && !rawConfig.get(UI_FONT_CUSTOM_PATH_KEY).isJsonNull()
+                ? rawConfig.get(UI_FONT_CUSTOM_PATH_KEY).getAsString()
+                : null;
+        return createCodeFontConfig(requestedMode, customFontPath);
+    }
+
+    private JsonObject createCodeFontConfig(String mode, String customFontPath) {
+        // UI font and code font share the same valid-mode set (see VALID_UI_FONT_MODES).
+        String normalizedMode = VALID_UI_FONT_MODES.contains(mode)
+                ? mode
+                : FontConfigService.UI_FONT_MODE_FOLLOW_EDITOR;
+        JsonObject codeFont = new JsonObject();
+        codeFont.addProperty(UI_FONT_MODE_KEY, normalizedMode);
+
+        if (FontConfigService.UI_FONT_MODE_CUSTOM_FILE.equals(normalizedMode)
+                && customFontPath != null
+                && !customFontPath.trim().isEmpty()) {
+            codeFont.addProperty(UI_FONT_CUSTOM_PATH_KEY, customFontPath.trim());
+        }
+
+        return codeFont;
     }
 
     /**
@@ -749,7 +834,14 @@ public class CodemossSettingsService {
     }
 
     private String getDefaultCodexSandboxMode() {
-        return CODEX_SANDBOX_MODE_DANGER_FULL_ACCESS;
+        // Security (F): default to workspace-write (sandboxed to the project) instead of
+        // danger-full-access (no sandbox), so a prompt-injected Codex command is contained
+        // to the project by default; full access must be an explicit opt-in. Windows keeps
+        // danger-full-access as a platform fallback because the Codex sandbox is experimental
+        // there (mirrors CodexSDKBridge.resolveCodexSandboxMode).
+        return com.github.claudecodegui.util.PlatformUtils.isWindows()
+                ? CODEX_SANDBOX_MODE_DANGER_FULL_ACCESS
+                : CODEX_SANDBOX_MODE_WORKSPACE_WRITE;
     }
 
     // ==================== Provider Management ====================

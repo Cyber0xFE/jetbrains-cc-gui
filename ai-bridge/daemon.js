@@ -23,6 +23,8 @@
  * - Persistent session state across requests
  */
 
+import { execFileSync } from 'node:child_process';
+import path from 'node:path';
 import { createInterface } from 'readline';
 import { handleClaudeCommand } from './channels/claude-channel.js';
 import { handleCodexCommand } from './channels/codex-channel.js';
@@ -34,21 +36,22 @@ import {
   shutdownPersistentRuntimes,
   abortCurrentTurn,
   resetRuntimePersistent,
-  getContextUsagePersistent
+  getContextUsagePersistent,
+  setPermissionModePersistent
 } from './services/claude/persistent-query-service.js';
-import { injectNetworkEnvVars } from './config/api-config.js';
+import { injectStartupEnvVars, isWebviewControlledEnvVar, isDangerousEnvVar } from './config/api-config.js';
 import { cleanupStaleTempImages } from './services/claude/attachment-service.js';
 
 // =============================================================================
-// Network Environment Setup (must run before any HTTPS connection)
+// Startup Environment Setup (must run before any HTTPS connection)
 // =============================================================================
 
-// Sync proxy and TLS settings from ~/.claude/settings.json BEFORE SDK
-// preloading or any other network activity, but only for explicitly
+// Sync proxy/TLS settings and AWS credentials from ~/.claude/settings.json
+// BEFORE SDK preloading or any other network activity, but only for explicitly
 // authorized Local settings.json / CLI Login modes. Without this, users behind
 // corporate SSL-inspection proxies in those modes will get certificate
-// verification errors.
-injectNetworkEnvVars();
+// verification errors, and Bedrock auth fails for desktop-launched IDEs.
+injectStartupEnvVars();
 
 // =============================================================================
 // Constants
@@ -78,6 +81,104 @@ const _originalStdoutWrite = process.stdout.write.bind(process.stdout);
 const _originalStderrWrite = process.stderr.write.bind(process.stderr);
 const _originalConsoleLog = console.log.bind(console);
 const _originalConsoleError = console.error.bind(console);
+
+// =============================================================================
+// GUI Login Environment Fix (must run before any subprocess spawns)
+// =============================================================================
+//
+// GUI-launched IDEs (JetBrains via WSL on Windows, Dock-launched on macOS)
+// don't source the user's shell init files, so the daemon inherits a minimal
+// system PATH. Probe the user's login shell once at startup and apply a
+// whitelist of runtime env vars so every subprocess this daemon spawns —
+// Claude's Bash tool, Codex, MCP servers, any future tool — automatically
+// sees the user's full environment without per-tool Java-side patches.
+
+if (process.platform !== 'win32' && !process.env.__AI_BRIDGE_ENV_PROBED) {
+  // PATH is critical; runtime homes let tools resolve config/data dirs correctly
+  const VARS_TO_INHERIT = new Set([
+    'PATH',
+    'NVM_DIR',
+    'PYENV_ROOT',
+    'RUSTUP_HOME', 'CARGO_HOME',
+    'GOPATH', 'GOROOT',
+    'JAVA_HOME',
+    'SDKMAN_DIR', 'RBENV_ROOT',
+  ]);
+
+  const loginShell = process.env.SHELL || '/bin/bash';
+  const shellBase = path.basename(loginShell);
+  // fish reads config.fish by default; all other POSIX shells need -l for login profile
+  const loginFlag = shellBase === 'fish' ? '-c' : '-lc';
+
+  const tryProbeEnv = (shell, flag) => {
+    try {
+      return execFileSync(shell, [flag, 'env -0'], {
+        timeout: 3000,
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'ignore'],
+      });
+    } catch {
+      return null;
+    }
+  };
+
+  let raw = tryProbeEnv(loginShell, loginFlag);
+  let probeSource = raw ? loginShell : null;
+
+  if (!raw && loginShell !== '/bin/bash') {
+    raw = tryProbeEnv('/bin/bash', '-lc');
+    if (raw) probeSource = '/bin/bash';
+  }
+
+  let applied = 0;
+  if (raw) {
+    for (const entry of raw.split('\0')) {
+      const eqIdx = entry.indexOf('=');
+      if (eqIdx < 1) continue;
+      const key = entry.slice(0, eqIdx);
+      if (!VARS_TO_INHERIT.has(key)) continue;
+      const val = entry.slice(eqIdx + 1);
+      if (key === 'PATH') {
+        // Merge rather than replace: the Java launcher already enriched PATH (Homebrew,
+        // nvm, ...), so adopting a login-shell PATH wholesale would drop those entries
+        // whenever the shell returns a minimal one. Union (current first, append only
+        // unseen entries) keeps every launcher path while still picking up dirs the
+        // launcher missed (pyenv/rustup/sdkman). This also fixes Apple-Silicon Homebrew
+        // PATHs, which the old "$HOME must appear" guard wrongly rejected.
+        const current = process.env.PATH || '';
+        const seen = new Set(current.split(path.delimiter).filter(Boolean));
+        const additions = val.split(path.delimiter).filter((p) => p && !seen.has(p));
+        if (additions.length > 0) {
+          process.env.PATH = current
+            ? `${current}${path.delimiter}${additions.join(path.delimiter)}`
+            : val;
+          applied++;
+        }
+        continue;
+      }
+      if (val !== process.env[key]) {
+        process.env[key] = val;
+        applied++;
+      }
+    }
+  }
+
+  process.env.__AI_BRIDGE_ENV_PROBED = '1';
+  _originalStderrWrite(
+    `[daemon] env probe: shell=${probeSource ?? 'none'} vars-applied=${applied}\n`,
+    'utf8',
+  );
+}
+
+// One-shot diagnostic: confirms WSLENV-propagated vars actually reached the daemon.
+// If CLAUDE_PERMISSION_DIR shows up as `unset` here while Java logs claim to have
+// set it, WSLENV is not being honored and the permission bridge will hang.
+_originalStderrWrite(
+  `[daemon] bridge env: CLAUDE_PERMISSION_DIR=${process.env.CLAUDE_PERMISSION_DIR ?? 'unset'}`
+  + ` CLAUDE_SESSION_ID=${process.env.CLAUDE_SESSION_ID ?? 'unset'}`
+  + ` WSLENV=${process.env.WSLENV ?? 'unset'}\n`,
+  'utf8',
+);
 
 /**
  * Write a raw NDJSON line to stdout (bypasses interception).
@@ -133,6 +234,18 @@ process.stdout.write = function (chunk, encoding, callback) {
   if (typeof callback === 'function') callback();
   return true;
 };
+
+// Expose the pre-interception writer so out-of-band emitters can write
+// process-level NDJSON that must NOT be wrapped with activeRequestId.
+// The per-runtime perpetual reader (runtime-lifecycle.js) uses this to emit
+// inter-turn 'session_updated' events; without it those events would be
+// misrouted to whatever request happens to be active. See startPerpetualReader().
+process.stdout._originalStdoutWrite = _originalStdoutWrite;
+// Expose the pre-interception stderr writer so out-of-band code (notably the
+// queue-bypassing setPermissionMode path, which runs while another turn's
+// processRequest is active) can log without being tagged with that turn's
+// activeRequestId and corrupting its stdout stream.
+process.stderr._originalStderrWrite = _originalStderrWrite;
 
 /**
  * Override console.log to go through our tagged stdout.
@@ -303,6 +416,20 @@ async function processRequest(request) {
     // set here — they only return timestamps and memory usage.
     if (params.env && typeof params.env === 'object') {
       for (const [key, value] of Object.entries(params.env)) {
+        // Request env can include settings.json values. Do not let stale
+        // environment controls override the webview's per-turn model, context,
+        // or reasoning selections.
+        if (isWebviewControlledEnvVar(key)) {
+          continue;
+        }
+        // Security (C): never let request/settings.json env inject code-execution or
+        // library-injection variables (NODE_OPTIONS, LD_PRELOAD, DYLD_*, …). A malicious
+        // project's .claude/settings.json env block would otherwise run arbitrary code in
+        // the daemon or any child process the SDK spawns.
+        if (isDangerousEnvVar(key)) {
+          console.warn(`[SECURITY] Ignoring dangerous env var from request: ${key}`);
+          continue;
+        }
         if (value !== undefined && value !== null) {
           // Save original value (undefined means key didn't exist)
           savedEnv[key] = process.env[key];
@@ -481,6 +608,31 @@ async function processRequest(request) {
         });
       }
       writeRawLine({ id: request.id || '0', done: true, success: true });
+      return;
+    }
+
+    // Live permission-mode switch bypasses the command queue: it targets the
+    // runtime backing the in-progress turn and must apply before that turn's
+    // next tool call. Queuing it behind the turn's own processRequest would
+    // defer the switch until the turn ends, defeating the purpose. Like abort,
+    // it runs fire-and-forget and emits its own done signal via writeRawLine.
+    if (request.method === 'claude.setPermissionMode') {
+      const switchId = request.id || '0';
+      if (!request.id) {
+        // Without a real request id the done signal carries id='0', which the
+        // Java side has no pending handler for — it would silently drop the
+        // signal and only surface via the 10s timeout. Warn so this is visible.
+        _originalStderrWrite(
+          '[daemon] setPermissionMode arrived without request.id; done signal may be orphaned\n',
+          'utf8'
+        );
+      }
+      setPermissionModePersistent(request.params || {})
+        .then(() => writeRawLine({ id: switchId, done: true, success: true }))
+        .catch((e) => {
+          _originalStderrWrite(`[daemon] setPermissionMode error: ${e.message}\n`, 'utf8');
+          writeRawLine({ id: switchId, done: true, success: false, error: e.message || String(e) });
+        });
       return;
     }
 

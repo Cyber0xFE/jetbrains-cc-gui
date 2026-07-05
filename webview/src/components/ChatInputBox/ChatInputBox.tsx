@@ -61,7 +61,7 @@ export const ChatInputBox = memo(forwardRef<ChatInputBoxHandle, ChatInputBoxProp
     {
       isLoading = false,
       selectedModel = 'claude-sonnet-4-6',
-      permissionMode = 'bypassPermissions',
+      permissionMode = 'default',
       currentProvider = 'claude',
       usagePercentage = 0,
       usageUsedTokens,
@@ -81,6 +81,8 @@ export const ChatInputBox = memo(forwardRef<ChatInputBoxHandle, ChatInputBoxProp
       onProviderSelect,
       reasoningEffort = 'high',
       onReasoningChange,
+      codexFastMode = 'normal',
+      onCodexFastModeChange,
       activeFile,
       selectedLines,
       onClearContext,
@@ -700,12 +702,14 @@ export const ChatInputBox = memo(forwardRef<ChatInputBoxHandle, ChatInputBoxProp
           permissionMode={permissionMode}
           currentProvider={currentProvider}
           reasoningEffort={reasoningEffort}
+          codexFastMode={codexFastMode}
           onSubmit={handleSubmit}
           onStop={onStop}
           onModeSelect={handleModeSelect}
           onModelSelect={handleModelSelect}
           onProviderSelect={onProviderSelect}
           onReasoningChange={onReasoningChange}
+          onCodexFastModeChange={onCodexFastModeChange}
           onEnhancePrompt={handleEnhancePrompt}
           alwaysThinkingEnabled={alwaysThinkingEnabled}
           onToggleThinking={onToggleThinking}

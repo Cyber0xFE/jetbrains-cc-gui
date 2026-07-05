@@ -17,9 +17,10 @@ import {
   loadCodexSdk,
   isCodexSdkAvailable,
 } from '../utils/sdk-loader.js';
-import { setupApiKey, buildCliEnv } from '../config/api-config.js';
+import { setupApiKey, buildCliEnv, buildWebviewControlledSettingsOverride } from '../config/api-config.js';
 import { mapModelIdToSdkName } from '../utils/model-utils.js';
 import { getRealHomeDir } from '../utils/path-utils.js';
+import { getClaudeCliPathOverride } from '../utils/claude-cli-path.js';
 import { buildCodexCliEnvironment } from './codex/codex-utils.js';
 
 let claudeSdk = null;
@@ -312,14 +313,21 @@ async function enhancePromptWithClaude(originalPrompt, systemPrompt, model, cont
   const fullPrompt = buildFullPrompt(originalPrompt, context);
   console.log(`[PromptEnhancer] Full prompt length: ${fullPrompt.length}`);
 
+  const claudeCliOverride = getClaudeCliPathOverride();
   const options = {
     cwd: workingDirectory,
-    permissionMode: 'bypassPermissions',
+    // Prompt enhancement only rewrites text — it must never execute tools. Use default
+    // mode with a deny-all canUseTool, and do NOT load project/local settings (whose
+    // permissions.allow could otherwise auto-approve a prompt-injected tool call).
+    permissionMode: 'default',
     model: sdkModelName,
     maxTurns: 1,
     env: buildCliEnv(),
+    settings: buildWebviewControlledSettingsOverride(model),
     systemPrompt,
-    settingSources: ['user', 'project', 'local'],
+    settingSources: ['user'],
+    canUseTool: async () => ({ behavior: 'deny', message: 'Prompt enhancement does not execute tools' }),
+    ...(claudeCliOverride && { pathToClaudeCodeExecutable: claudeCliOverride }),
   };
 
   console.log('[PromptEnhancer] Calling Claude Agent SDK...');

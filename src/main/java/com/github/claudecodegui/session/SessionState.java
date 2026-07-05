@@ -36,6 +36,27 @@ public class SessionState {
         return mode != null && VALID_PERMISSION_MODES.contains(mode.trim());
     }
 
+    /**
+     * Canonical whitelist of valid Claude/Codex reasoning effort levels.
+     */
+    public static final Set<String> VALID_REASONING_EFFORTS;
+    static {
+        Set<String> efforts = new HashSet<>();
+        efforts.add("low");
+        efforts.add("medium");
+        efforts.add("high");
+        efforts.add("xhigh");
+        efforts.add("max");
+        VALID_REASONING_EFFORTS = Collections.unmodifiableSet(efforts);
+    }
+
+    /**
+     * Check whether the given reasoning effort string is recognized.
+     */
+    public static boolean isValidReasoningEffort(String effort) {
+        return effort != null && VALID_REASONING_EFFORTS.contains(effort.trim());
+    }
+
     // Session identifiers
     private String sessionId;
     private String channelId;
@@ -58,11 +79,16 @@ public class SessionState {
     // Configuration fields below are volatile because set_mode / set_model / set_provider
     // and send_message may execute on different async handler threads with no other
     // happens-before guarantee between them.
-    private volatile String permissionMode = "bypassPermissions";
+    // Default to "default" (prompt on each tool call). "bypassPermissions" must be an
+    // explicit, informed opt-in — see security remediation A: shipping bypass as the
+    // out-of-the-box default removed the only confirmation gate for AI-issued commands.
+    private volatile String permissionMode = "default";
     private volatile String model = "claude-sonnet-4-6";
     private volatile String provider = "claude";
-    // Reasoning effort (thinking depth)
-    private volatile String reasoningEffort = "high";
+    // Reasoning effort (thinking depth). Null means "do not override SDK/settings".
+    private volatile String reasoningEffort = null;
+    // Codex service tier: null = use Codex defaults, "fast" = Codex /fast.
+    private volatile String codexServiceTier = null;
 
     // Slash commands — volatile for cross-thread visibility (same reason as permissionMode/model/provider)
     private volatile List<String> slashCommands = new ArrayList<>();
@@ -125,6 +151,10 @@ public class SessionState {
 
     public String getReasoningEffort() {
         return reasoningEffort;
+    }
+
+    public String getCodexServiceTier() {
+        return codexServiceTier;
     }
 
     public String getRuntimeSessionEpoch() {
@@ -191,7 +221,19 @@ public class SessionState {
     }
 
     public void setReasoningEffort(String reasoningEffort) {
-        this.reasoningEffort = reasoningEffort;
+        if (reasoningEffort == null || reasoningEffort.trim().isEmpty()) {
+            this.reasoningEffort = null;
+            return;
+        }
+        String trimmed = reasoningEffort.trim();
+        if (!isValidReasoningEffort(trimmed)) {
+            return;
+        }
+        this.reasoningEffort = trimmed;
+    }
+
+    public void setCodexServiceTier(String codexServiceTier) {
+        this.codexServiceTier = codexServiceTier;
     }
 
     public void setRuntimeSessionEpoch(String runtimeSessionEpoch) {

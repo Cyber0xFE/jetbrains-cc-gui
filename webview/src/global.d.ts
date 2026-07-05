@@ -58,9 +58,11 @@ interface Window {
   onExportSessionData?: (json: string) => void;
 
   /**
-   * Clear all messages
+   * Clear all messages. The optional barrier sequence (the backend coalescer's
+   * post-reset updateSequence) advances __minAcceptedUpdateSequence so stale
+   * in-flight updateMessages from the previous session are rejected.
    */
-  clearMessages?: () => void;
+  clearMessages?: (barrierSequence?: string | number) => void;
 
   /**
    * Add error message
@@ -92,6 +94,15 @@ interface Window {
    * Subagent sidechain history callback.
    */
   onSubagentHistoryLoaded?: (json: string) => void;
+
+  /**
+   * SDK-to-CLI session conversion result callback.
+   * Called by the Java backend after attempting to convert entrypoint from "sdk-cli" to "cli".
+   * Payload: { success: boolean, infoCode?: string, errorCode?: string }.
+   * infoCode carries extra context on success (e.g. ALREADY_CLI_SESSION);
+   * errorCode identifies the failure reason for i18n lookup.
+   */
+  onConversionResult?: (json: string) => void;
 
   /**
    * Add user message to chat (used for external Quick Fix feature)
@@ -159,6 +170,30 @@ interface Window {
    * Show PlanApproval dialog
    */
   showPlanApprovalDialog?: (json: string) => void;
+
+  /**
+   * Force-close the open AskUserQuestion dialog matching the given requestId.
+   * Sent by the Java backend when its safety-net timer fires and resolves the
+   * pending future with an empty answer — the WebView dialog (if still visible)
+   * must be torn down too, otherwise its open-refs stay set and every
+   * subsequent showAskUserQuestionDialog call is silently enqueued behind the
+   * orphaned dialog (issue #1360). When requestId is null/empty, every open
+   * dialog is closed.
+   */
+  forceCloseAskUserQuestionDialog?: (requestId?: string | null) => void;
+
+  /**
+   * Force-close the open permission dialog matching the given channelId, or
+   * every open dialog when channelId is null/empty. Same rationale as
+   * forceCloseAskUserQuestionDialog.
+   */
+  forceClosePermissionDialog?: (channelId?: string | null) => void;
+
+  /**
+   * Force-close the open plan approval dialog matching the given requestId, or
+   * every open dialog when requestId is null/empty.
+   */
+  forceClosePlanApprovalDialog?: (requestId?: string | null) => void;
 
   /**
    * Add selection info (file and line numbers) - auto-tracked, only updates ContextBar
@@ -330,6 +365,11 @@ interface Window {
   updateNodePath?: (path: string) => void;
 
   /**
+   * Update custom Claude CLI path
+   */
+  updateClaudeCliPath?: (path: string) => void;
+
+  /**
    * Update working directory configuration
    */
   updateWorkingDirectory?: (json: string) => void;
@@ -436,9 +476,19 @@ interface Window {
   applyUiFontConfig?: (config: import('./types/uiFontConfig').UiFontConfig | string) => void;
 
   /**
+   * Apply effective plugin code font configuration (called from Java backend)
+   */
+  applyCodeFontConfig?: (config: import('./types/uiFontConfig').CodeFontConfig | string) => void;
+
+  /**
    * Pending effective UI font config before applyUiFontConfig is registered
    */
   __pendingUiFontConfig?: import('./types/uiFontConfig').UiFontConfig;
+
+  /**
+   * Pending effective code font config before applyCodeFontConfig is registered
+   */
+  __pendingCodeFontConfig?: import('./types/uiFontConfig').CodeFontConfig;
 
   /**
    * Apply IDEA language configuration (called from Java backend)
@@ -490,6 +540,11 @@ interface Window {
    * Effective UI font config received callback
    */
   onUiFontConfigReceived?: (json: string) => void;
+
+  /**
+   * Effective code font config received callback
+   */
+  onCodeFontConfigReceived?: (json: string) => void;
 
   /**
    * IDE theme received callback - receives IDE theme configuration
@@ -570,6 +625,11 @@ interface Window {
    * Update Codex providers list
    */
   updateCodexProviders?: (json: string) => void;
+
+  /**
+   * Update Codex subscription quota snapshot.
+   */
+  updateCodexSubscriptionQuota?: (json: string) => void;
 
   /**
    * Update active Codex provider
@@ -885,6 +945,21 @@ interface Window {
    * Used by useThemeInit to avoid a flash of incorrect theme.
    */
   __INITIAL_IDE_THEME__?: 'light' | 'dark';
+
+  /**
+   * Per-tab provider id ("claude" / "codex") injected by Java into the HTML
+   * before React boots. Used by useModelStatePersistence to override the
+   * global localStorage snapshot ("model-selection-state") when the backend
+   * has already restored a provider for this tab. Empty / unset means no
+   * backend preference — fall back to localStorage. See issue #1353.
+   */
+  __INITIAL_TAB_PROVIDER__?: string;
+
+  /**
+   * Per-tab model id injected by Java, used the same way as
+   * __INITIAL_TAB_PROVIDER__. Empty / unset means no backend preference.
+   */
+  __INITIAL_TAB_MODEL__?: string;
 
   // ============================================================================
   // Provider settings panel callbacks (registered by ProviderList)

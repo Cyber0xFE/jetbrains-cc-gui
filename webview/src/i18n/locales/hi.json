@@ -81,7 +81,10 @@
     "disabled": "अक्षम",
     "sdkNotInstalled": "{{provider}} SDK इंस्टॉल नहीं है। चैट शुरू करने के लिए कृपया SDK इंस्टॉल करें।",
     "sdkStatusLoading": "Checking SDK status...",
-    "openSourceBanner": "यह प्रोजेक्ट 100% ओपन सोर्स है (नकली प्रोजेक्ट से सावधान रहें)",
+    "openSourceBanner": "यह प्रोजेक्ट 100% ओपन सोर्स और मुफ़्त है (नकली प्रोजेक्ट से सावधान रहें)",
+    "openSourceBannerStar": "Star",
+    "openSourceBannerStarToast": "रिपॉजिटरी लिंक क्लिपबोर्ड पर कॉपी हो गया — ब्राउज़र में पेस्ट करके खोलें ⭐",
+    "openSourceBannerStarAria": "रिपॉजिटरी लिंक कॉपी करें और GitHub पर स्टार करें",
     "goInstallSdk": "इंस्टॉल करने जाएं",
     "commandNotImplemented": "`{{command}}` सुविधा अभी तक लागू नहीं की गई है।",
     "clearCommandDescription": "बातचीत इतिहास साफ़ करें और नया सत्र शुरू करें",
@@ -91,6 +94,8 @@
     "streamingConnected": "{{provider}} कनेक्ट हो गया, आपके प्रश्न को समझ रहा है",
     "showEarlierMessages": "{{count}} पुराने संदेश दिखाएं",
     "totalDuration": "इस जवाब में लगा समय",
+    "tokenUsage": "{{input}} इन / {{output}} आउट",
+    "tokenUsageDetail": "टर्न कुल — इनपुट {{input}} · कैश लेखन {{cacheWrite}} · कैश पठन {{cacheRead}} · आउटपुट {{output}}",
     "search": {
       "ariaLabel": "बातचीत में खोजें",
       "placeholder": "बातचीत में खोजें...",
@@ -158,6 +163,11 @@
         "hintText": "वास्तविक Node.js निष्पादन योग्य फ़ाइल पथ प्राप्त करें। खाली होने पर प्लगइन स्वचालित रूप से Node.js का पता लगाने का प्रयास करेगा।",
         "versionTooLow": "Node.js संस्करण बहुत पुराना है। प्लगइन को ठीक से चलाने के लिए v{{minVersion}} या उच्चतर की आवश्यकता है"
       },
+      "claudeCliPath": {
+        "label": "Claude CLI पथ (ओवरराइड)",
+        "placeholder": "उदा. /usr/local/bin/claude — अंतर्निहित SDK का उपयोग करने के लिए खाली छोड़ें",
+        "hint": "वैकल्पिक। सेट करने पर, प्लगइन अंतर्निहित @anthropic-ai/claude-agent-sdk के बजाय इस बाइनरी को चलाता है। सहेजने पर डेमॉन पुनः आरंभ होता है।"
+      },
       "workingDirectory": {
         "label": "Working Directory",
         "placeholder": "e.g. project1 or leave empty to use project root",
@@ -173,16 +183,28 @@
         "level6": "सबसे बड़ा (140%)"
       },
       "editorFont": {
-        "label": "फ़ॉन्ट",
-        "hint": "यहाँ प्लगइन UI का फ़ॉन्ट बदला जाता है; फ़ॉन्ट आकार और लाइन स्पेसिंग अभी भी एडिटर का अनुसरण करते हैं।",
-        "followOption": "एडिटर का अनुसरण करें ({{font}})",
-        "customOption": "कस्टम फ़ॉन्ट फ़ाइल",
-        "customPathLabel": "फ़ॉन्ट फ़ाइल पथ",
-        "customPathPlaceholder": ".ttf / .otf फ़ॉन्ट फ़ाइल का पथ चुनें या दर्ज करें",
+        "label": "UI फ़ॉन्ट",
+        "hint": "यहाँ प्लगइन UI का फ़ॉन्ट बदला जाता है; कोड के लिए अलग फ़ॉन्ट चुना जा सकता है।",
+        "followOption": "IDEA UI फ़ॉन्ट का पालन करें ({{font}})",
+        "customOption": "कस्टम UI फ़ॉन्ट फ़ाइल",
+        "customPathLabel": "UI फ़ॉन्ट फ़ाइल पथ",
+        "customPathPlaceholder": ".ttf / .otf UI फ़ॉन्ट फ़ाइल का पथ चुनें या दर्ज करें",
         "browse": "ब्राउज़ करें",
-        "warningUnavailable": "फ़ॉन्ट उपलब्ध नहीं है, अभी एडिटर फ़ॉन्ट उपयोग में है",
+        "warningUnavailable": "UI फ़ॉन्ट उपलब्ध नहीं है, अभी IDEA UI फ़ॉन्ट उपयोग में है",
+        "statusFollowEditor": "अभी IDEA UI फ़ॉन्ट उपयोग में है: {{font}}",
+        "statusCustom": "अभी कस्टम UI फ़ॉन्ट उपयोग में है: {{font}}"
+      },
+      "codeFont": {
+        "label": "कोड फ़ॉन्ट",
+        "hint": "Markdown कोड और कमांड ब्लॉक इस फ़ॉन्ट का उपयोग करते हैं।",
+        "followOption": "एडिटर फ़ॉन्ट का पालन करें ({{font}})",
+        "customOption": "कस्टम कोड फ़ॉन्ट फ़ाइल",
+        "customPathLabel": "कोड फ़ॉन्ट फ़ाइल पथ",
+        "customPathPlaceholder": ".ttf / .otf कोड फ़ॉन्ट फ़ाइल का पथ चुनें या दर्ज करें",
+        "browse": "ब्राउज़ करें",
+        "warningUnavailable": "कोड फ़ॉन्ट उपलब्ध नहीं है, अभी एडिटर फ़ॉन्ट उपयोग में है",
         "statusFollowEditor": "अभी एडिटर फ़ॉन्ट उपयोग में है: {{font}}",
-        "statusCustom": "अभी कस्टम फ़ॉन्ट उपयोग में है: {{font}}"
+        "statusCustom": "अभी कस्टम कोड फ़ॉन्ट उपयोग में है: {{font}}"
       },
       "streaming": {
         "label": "Streaming",
@@ -628,32 +650,32 @@
       }
     },
     "agent": {
-      "title": "एजेंट",
+      "title": "प्रॉम्प्ट",
       "create": "बनाएं",
-      "createAgent": "एजेंट बनाएं",
-      "createAgentHint": "एजेंट सेटिंग्स पेज पर जाने के लिए क्लिक करें",
-      "customAgents": "कस्टम एजेंट",
-      "noAgents": "कोई कस्टम एजेंट नहीं",
-      "noAgentsDropdown": "कोई एजेंट नहीं",
+      "createAgent": "प्रॉम्प्ट बनाएं",
+      "createAgentHint": "प्रॉम्प्ट सेटिंग्स पेज पर जाने के लिए क्लिक करें",
+      "customAgents": "कस्टम प्रॉम्प्ट",
+      "noAgents": "कोई कस्टम प्रॉम्प्ट नहीं",
+      "noAgentsDropdown": "कोई प्रॉम्प्ट नहीं",
       "loadFailed": "लोड विफल",
       "loading": "लोड हो रहा है...",
       "menu": "मेनू",
-      "addSuccess": "एजेंट सफलतापूर्वक बनाया गया",
-      "updateSuccess": "एजेंट सफलतापूर्वक अपडेट किया गया",
-      "deleteSuccess": "एजेंट सफलतापूर्वक हटाया गया",
+      "addSuccess": "प्रॉम्प्ट सफलतापूर्वक बनाया गया",
+      "updateSuccess": "प्रॉम्प्ट सफलतापूर्वक अपडेट किया गया",
+      "deleteSuccess": "प्रॉम्प्ट सफलतापूर्वक हटाया गया",
       "operationSuccess": "ऑपरेशन सफल",
       "operationFailed": "ऑपरेशन विफल",
       "deleteConfirmTitle": "हटाने की पुष्टि करें",
-      "deleteConfirmMessage": "क्या आप एजेंट \"{{name}}\" को हटाना चाहते हैं? यह क्रिया पूर्ववत नहीं की जा सकती।",
-      "clearAgent": "चयनित एजेंट साफ़ करें",
+      "deleteConfirmMessage": "क्या आप प्रॉम्प्ट \"{{name}}\" को हटाना चाहते हैं? यह क्रिया पूर्ववत नहीं की जा सकती।",
+      "clearAgent": "चयनित प्रॉम्प्ट साफ़ करें",
       "dialog": {
-        "addTitle": "एजेंट बनाएं",
-        "editTitle": "एजेंट संपादित करें",
+        "addTitle": "प्रॉम्प्ट बनाएं",
+        "editTitle": "प्रॉम्प्ट संपादित करें",
         "name": "नाम",
-        "namePlaceholder": "एजेंट का नाम दर्ज करें",
-        "nameRequired": "कृपया एजेंट का नाम दर्ज करें",
+        "namePlaceholder": "प्रॉम्प्ट का नाम दर्ज करें",
+        "nameRequired": "कृपया प्रॉम्प्ट का नाम दर्ज करें",
         "prompt": "प्रॉम्प्ट",
-        "promptPlaceholder": "एजेंट की भूमिका, स्वर, कार्यप्रवाह, टूल प्राथमिकताएं और नियम दर्ज करें। (वैकल्पिक)",
+        "promptPlaceholder": "प्रॉम्प्ट की भूमिका, स्वर, कार्यप्रवाह, टूल प्राथमिकताएं और नियम दर्ज करें। (वैकल्पिक)",
         "promptHint": "प्रॉम्प्ट बातचीत की शुरुआत में AI को सिस्टम निर्देश के रूप में भेजा जाएगा",
         "confirmAdd": "बनाएं",
         "saveChanges": "सहेजें"
@@ -735,6 +757,12 @@
     "copySessionId": "CLI resume के लिए सेशन ID कॉपी करें",
     "sessionIdCopied": "सेशन ID कॉपी किया गया",
     "copyFailed": "कॉपी विफल",
+    "convertToCliSession": "CLI पहचान सेशन में बदलें",
+    "convertButton": "CLI में बदलें",
+    "convertSuccess": "सेशन CLI पहचान में बदल दिया गया",
+    "convertFailed": "रूपांतरण विफल",
+    "confirmConvert": "CLI सेशन में बदलें?",
+    "convertConfirmMessage": "यह सत्र का entrypoint संशोधित करेगा ताकि यह Claude Code CLI की /resume सूची में दिखाई दे।",
     "timeAgo": {
       "yearsAgo": "साल पहले",
       "monthsAgo": "महीने पहले",
@@ -742,12 +770,33 @@
       "hoursAgo": "घंटे पहले",
       "minutesAgo": "मिनट पहले",
       "secondsAgo": "सेकंड पहले"
+    },
+    "conversionErrors": {
+      "INVALID_SESSION_ID": "अमान्य सत्र ID",
+      "SESSION_ACTIVE": "वर्तमान में सक्रिय सत्र को परिवर्तित नहीं किया जा सकता। पहले नया सत्र शुरू करें, फिर इसे परिवर्तित करें",
+      "SESSION_NOT_FOUND": "सत्र फ़ाइल नहीं मिली",
+      "FILE_NOT_EXIST": "सत्र फ़ाइल मौजूद नहीं है",
+      "FILE_LOCKED": "सत्र फ़ाइल किसी अन्य प्रक्रिया द्वारा एक्सेस की जा रही है",
+      "NOT_SDK_SESSION": "यह सत्र SDK द्वारा नहीं बनाया गया (entrypoint sdk-cli नहीं है)",
+      "ALREADY_CLI_SESSION": "यह सत्र पहले से ही CLI सत्र है",
+      "CONVERSION_FAILED": "रूपांतरण विफल, कृपया बाद में पुनः प्रयास करें"
+    },
+    "entrypointLabel": {
+      "sdk-cli": "SDK सत्र",
+      "claude-vscode": "VS Code",
+      "remote": "रिमोट"
+    },
+    "entrypointTooltip": {
+      "sdk-cli": "यह सत्र प्लगइन द्वारा SDK के माध्यम से बनाया गया था और CLI में डिफ़ॉल्ट रूप से नहीं दिखाया गया है। टर्मिनल CLI की /resume सूची में इसे दिखाने के लिए 'CLI में कनवर्ट करें' पर क्लिक करें",
+      "claude-vscode": "यह सत्र VS Code एक्सटेंशन द्वारा बनाया गया था और CLI में डिफ़ॉल्ट रूप से नहीं दिखाया गया है। टर्मिनल CLI की /resume सूची में इसे दिखाने के लिए 'CLI में कनवर्ट करें' पर क्लिक करें",
+      "remote": "यह सत्र Claude Code के रिमोट इंस्टेंस द्वारा बनाया गया था"
     }
   },
   "permission": {
     "dialogTitle": "अनुमति अनुरोध",
     "allow": "एक बार अनुमति दें",
     "allowAlways": "हमेशा अनुमति दें",
+    "allowAlwaysCommand": "इस कमांड को हमेशा अनुमति दें",
     "deny": "अस्वीकार करें",
     "userDenied": "उपयोगकर्ता ने अनुमति अनुरोध अस्वीकार कर दिया",
     "fromExternalProcess": "बाहरी प्रक्रिया से अनुरोध",
@@ -1283,6 +1332,9 @@
   },
   "models": {
     "addModel": "मॉडल जोड़ें",
+    "searchPlaceholder": "मॉडल खोजें",
+    "noModelsFound": "कोई मॉडल नहीं मिला",
+    "hiddenModelCount": "+ {{count}} और मॉडल. खोजने के लिए टाइप करें.",
     "claude": {
       "sonnet46": {
         "label": "Sonnet 4.6",
@@ -1303,6 +1355,10 @@
       "opus48": {
         "label": "Opus 4.8",
         "description": "Opus 4.8 · नवीनतम और सबसे सक्षम"
+      },
+      "fable5": {
+        "label": "Fable 5",
+        "description": "Fable 5 · सबसे शक्तिशाली · Mythos-श्रेणी"
       }
     },
     "longContext": {

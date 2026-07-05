@@ -50,6 +50,9 @@ const App = () => {
     openPermissionDialog,
     openAskUserQuestionDialog,
     openPlanApprovalDialog,
+    forceClosePermissionDialog,
+    forceCloseAskUserQuestionDialog,
+    forceClosePlanApprovalDialog,
     openContextUsageDialog,
     updateContextUsageData,
     closeContextUsageDialog,
@@ -143,7 +146,7 @@ const App = () => {
     selectedAgent, sdkStatusLoaded, currentSdkInstalled,
     currentProviderRef,
     activeProviderConfig, claudeSettingsAlwaysThinkingEnabled,
-    reasoningEffort, streamingEnabledSetting, sendShortcut, autoOpenFileEnabled,
+    reasoningEffort, codexFastMode, streamingEnabledSetting, sendShortcut, autoOpenFileEnabled,
     longContextEnabled,
     usagePercentage, usageUsedTokens, usageMaxTokens,
     setPermissionMode,
@@ -156,7 +159,7 @@ const App = () => {
     setUsagePercentage, setUsageUsedTokens, setUsageMaxTokens,
     syncActiveProviderModelMapping,
     handleModeSelect, handleModelSelect, handleProviderSelect,
-    handleReasoningChange, handleAgentSelect, handleToggleThinking,
+    handleReasoningChange, handleCodexFastModeChange, handleAgentSelect, handleToggleThinking,
     handleStreamingEnabledChange, handleSendShortcutChange,
     handleAutoOpenFileEnabledChange, handleLongContextChange,
   } = useModelProviderState({ addToast, t });
@@ -254,7 +257,7 @@ const App = () => {
     handleConfirmNewSession, handleCancelNewSession,
     handleConfirmInterrupt, handleCancelInterrupt,
     loadHistorySession, deleteHistorySession, deleteHistorySessions, exportHistorySession,
-    toggleFavoriteSession, updateHistoryTitle, applyHistoryTitleLocal,
+    toggleFavoriteSession, updateHistoryTitle, applyHistoryTitleLocal, convertToCliSession,
   } = useSessionManagement({
     messages, loading, historyData, currentSessionId,
     setHistoryData, setMessages, setCurrentView, setCurrentSessionId,
@@ -292,6 +295,7 @@ const App = () => {
     getOrCreateStreamingAssistantIndex, patchAssistantForStreaming,
     syncActiveProviderModelMapping,
     openPermissionDialog, openAskUserQuestionDialog, openPlanApprovalDialog,
+    forceClosePermissionDialog, forceCloseAskUserQuestionDialog, forceClosePlanApprovalDialog,
     openContextUsageDialog, updateContextUsageData,
     closeContextUsageDialog,
     customSessionTitleRef, currentSessionIdRef, updateHistoryTitle, applyHistoryTitleLocal,
@@ -319,7 +323,7 @@ const App = () => {
     interruptSession,
   } = useMessageSender({
     t, addToast,
-    currentProvider, selectedModel, permissionMode, selectedAgent,
+    currentProvider, selectedModel, permissionMode, reasoningEffort, selectedAgent, codexFastMode,
     sdkStatusLoaded, currentSdkInstalled,
     sentAttachmentsRef, chatInputRef, messagesContainerRef,
     isUserAtBottomRef, userPausedRef, isStreamingRef,
@@ -496,6 +500,7 @@ const App = () => {
           activeProviderConfig={activeProviderConfig}
           claudeSettingsAlwaysThinkingEnabled={claudeSettingsAlwaysThinkingEnabled}
           reasoningEffort={reasoningEffort}
+          codexFastMode={codexFastMode}
           streamingEnabledSetting={streamingEnabledSetting}
           sendShortcut={sendShortcut}
           autoOpenFileEnabled={autoOpenFileEnabled}
@@ -507,6 +512,7 @@ const App = () => {
           onModelSelect={handleModelSelect}
           onAgentSelect={handleAgentSelect}
           onReasoningChange={handleReasoningChange}
+          onCodexFastModeChange={handleCodexFastModeChange}
           onToggleThinking={handleToggleThinking}
           onStreamingEnabledChange={handleStreamingEnabledChange}
           onAutoOpenFileEnabledChange={handleAutoOpenFileEnabledChange}
@@ -518,12 +524,14 @@ const App = () => {
         <HistoryView
           historyData={historyData}
           currentProvider={currentProvider}
+          currentSessionId={currentSessionId}
           onLoadSession={loadHistorySession}
           onDeleteSession={deleteHistorySession}
           onDeleteSessions={deleteHistorySessions}
           onExportSession={exportHistorySession}
           onToggleFavorite={toggleFavoriteSession}
           onUpdateTitle={updateHistoryTitle}
+          onConvertToCliSession={convertToCliSession}
         />
       )}
 

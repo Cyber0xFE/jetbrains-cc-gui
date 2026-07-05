@@ -13,6 +13,132 @@ export interface ChangelogEntry {
 
 export const CHANGELOG_DATA: ChangelogEntry[] = [
   {
+    version: '0.4.6',
+    date: '2026-06-28',
+    content: {
+      en: `✨ Features
+- Add **live permission-mode hot-swap**: switching the permission mode mid-turn now takes effect immediately for the current turn's subsequent tool calls — no runtime restart, no waiting for the next message (by @gadfly3173, closes #1380)
+- Add a **GitHub Star button** to the open-source promo banner: click to copy the repo URL; main copy now reads "100% open-source and free", localized across 10 languages (by @zkpaiminmin)
+
+🔒 Security Hardening
+- Default permission mode changed from \`bypassPermissions\` to \`default\` — tool calls are confirmed by default instead of auto-approved
+- PreToolUse hook returns \`ask\` for Bash/Agent to override permissive \`settings.json\` allow-rules; "Always allow" scoped to the command level
+- Block \`NODE_OPTIONS\` / \`LD_PRELOAD\` / \`DYLD_*\` env-var injection; refuse MCP stdio launches with shell metacharacters
+- \`npm install\` runs with \`--ignore-scripts\` (supply-chain RCE guard); \`settings.json\` / \`config.json\` hardened to \`0600\`
+- Codex default sandbox changed from \`danger-full-access\` to \`workspace-write\`
+- (all by @zkpaiminmin)
+
+🐛 Fixes
+- Fix **Bedrock/Vertex/Foundry 403** since v0.4.5: only set \`CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST\` when no cloud-provider switch is active (by @gadfly3173, closes #1328)
+- Fix **cloud-provider credentials** (\`AWS_PROFILE\`, \`AWS_REGION\`, …) missing when the IDE is launched from the Dock / Start Menu / launcher (by @sandeepyadav1478, closes #1310)
+- Fix **blank tool window on Android Studio 2026.x** whose bundled JBR predates b1373 and lacks \`JCefAppConfig.isRemoteEnabled()\`; show a targeted upgrade panel (by @zkpaiminmin)
+- Fix **whole-turn message / \`tool_result\` loss** from React 18 automatic batching: merge the two \`onStreamEnd\` updaters into one (by @gadfly3173, closes #1315)
+- Fix **cross-turn thinking deltas** no longer streaming, and characters vanishing after a duplicated leading delta (e.g. "刚刚", "咕咕嘎嘎") (by @gadfly3173, closes #1369 #1371)
+- Fix **dialogs not reappearing** after a timeout, the tab provider type swapping after restart, and a stale rAF snapshot on new-session clear (by @gadfly3173, closes #1360 #1353 #1339)
+- Fix the **AI working directory** resolving to the bridge install dir, which hid all real project history (by @gadfly3173, closes #1343)
+- Fix new sessions reusing the previous **session ID** (by @commingling, hardened by @zkpaiminmin, closes #1192)
+- Fix CLI-initiated session updates not rendering in the background (by @gadfly3173, closes #1305)
+- Fix parallel \`tool_use\` falsely flagged interrupted with a red badge; \`.replace is not a function\` crashes on non-string content (by @gadfly3173)
+- Fix selector dropdowns overflowing the viewport, the model list growing unbounded, and inline code font-size mismatch (by @moritzfl, @gadfly3173)
+
+🔧 Improvements
+- Rename the "Agent" terminology to "Prompt" across all locales (by @zkpaiminmin)
+- Add a \`SECURITY.md\` security policy (by @zkpaiminmin)`,
+      zh: `✨ 新功能
+- 新增**权限模式实时热切换**：对话进行中切换权限模式即时对当前轮次后续工具调用生效，无需重启 runtime、无需等待下一条消息（by @gadfly3173，关闭 #1380）
+- 开源推广 banner 新增 **GitHub Star 按钮**：点击复制仓库地址，主文案更新为「本项目保证 100% 开源和免费」，覆盖 10 种语言（by @zkpaiminmin）
+
+🔒 安全加固
+- 默认权限模式从 \`bypassPermissions\` 改为 \`default\` —— 工具调用默认需确认而非自动放行
+- PreToolUse hook 对 Bash/Agent 返回 \`ask\`，覆盖 \`settings.json\` 过宽的 allow 规则；「始终允许」限定到命令级
+- 阻止 \`NODE_OPTIONS\` / \`LD_PRELOAD\` / \`DYLD_*\` 环境变量注入；拒绝含 shell 元字符的 MCP stdio 启动
+- \`npm install\` 增加 \`--ignore-scripts\`（供应链 RCE 防护）；\`settings.json\` / \`config.json\` 收紧到 \`0600\`
+- Codex 默认 sandbox 从 \`danger-full-access\` 改为 \`workspace-write\`
+- （以上均 by @zkpaiminmin）
+
+🐛 修复
+- 修复自 v0.4.5 起 **Bedrock/Vertex/Foundry 403**：仅在未启用云 provider 开关时设置 \`CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST\`（by @gadfly3173，关闭 #1328）
+- 修复从 Dock / 开始菜单 / 启动器打开 IDE 时**云 provider 凭证**（\`AWS_PROFILE\`、\`AWS_REGION\` 等）缺失（by @sandeepyadav1478，关闭 #1310）
+- 修复 **Android Studio 2026.x 工具窗空白**：内置 JBR 早于 b1373、缺失 \`JCefAppConfig.isRemoteEnabled()\`，显示专属升级提示面板（by @zkpaiminmin）
+- 修复 React 18 自动批处理导致**整轮消息 / \`tool_result\` 丢失**：将 \`onStreamEnd\` 两次 updater 合并为一个（by @gadfly3173，关闭 #1315）
+- 修复**跨轮 thinking delta** 不再流式，以及重复首个 delta 导致后续字符消失（如「刚刚」「咕咕嘎嘎」）（by @gadfly3173，关闭 #1369 #1371）
+- 修复超时后**对话框不再弹出**、重启后 tab provider 类型互换、新会话清空时陈旧 rAF 快照（by @gadfly3173，关闭 #1360 #1353 #1339）
+- 修复 **AI 工作目录**被解析为 bridge 安装目录，导致所有真实项目历史被隐藏（by @gadfly3173，关闭 #1343）
+- 修复新会话复用上一个 **session ID**（by @commingling，@zkpaiminmin 加固，关闭 #1192）
+- 修复 CLI 发起的会话更新不在后台渲染（by @gadfly3173，关闭 #1305）
+- 修复并行 \`tool_use\` 被误判中断显示红色 badge；非字符串内容触发 \`.replace is not a function\` 崩溃（by @gadfly3173）
+- 修复选择器下拉菜单超出视口、模型列表无限撑高、行内代码字号不一致（by @moritzfl，@gadfly3173）
+
+🔧 改进
+- 将全部语言中的「Agent」术语改名为「Prompt」（by @zkpaiminmin）
+- 新增 \`SECURITY.md\` 安全策略文档（by @zkpaiminmin）`,
+    },
+  },
+  {
+    version: '0.4.5',
+    date: '2026-06-11',
+    content: {
+      en: `✨ Features
+- Add **Codex fast mode**: new "Fast" speed mode in the model selector that maps to \`service_tier=fast\` for supported Codex models (by @llanc)
+- Add **Claude Code CLI path override**: new setting in Settings → Environment to point the plugin at a specific \`claude\` binary (by @senfix)
+- Add separate **Code Font** setting (Settings → Basic → Appearance), independent from the UI font: code blocks and Bash output use the code font; chat text follows the IDEA UI font (by @Luna5ama, closes #1240)
+- Add **Codex subscription quota panel** in the model selector showing ChatGPT Plus/Pro quota status with dual-source fetching and snapshot caching (by @Luna5ama)
+- Add **Shift+Esc** shortcut to hide the CCG tool window panel (by @Cyber0xFE)
+- **Ctrl+Alt+K** now always opens the CCG panel regardless of editor selection; auto-focuses the input field (by @Cyber0xFE)
+- Add **per-message token indicator** at the bottom of each turn showing whole-turn aggregated token count (by @suzhelan, @zkpaiminmin)
+- Add **SDK → CLI session conversion**: SDK-created sessions can be converted to CLI sessions to appear in \`/resume\` list; shown as entrypoint badges in history (by @gadfly3173)
+- Add **Claude Fable 5** model support with Mythos-class capabilities ($10/$50 per 1M tokens) (by @zkpaiminmin)
+- Integrate **Claude Code Task tracking API** (TaskCreate/TaskUpdate/TaskGet/TaskList): agent/task invocations render as collapsible groups with nested tool calls and persisted expand/collapse state (by @gadfly3173, @zhuzhihang)
+
+🐛 Fixes
+- Fix full **WSL2 compatibility**: SDK installed into WSL filesystem, permission env vars propagated via WSLENV, login-shell PATH merged not replaced, path handling migrated to \`WslPathUtil\` (by @Gazoon007)
+- Fix **tool spinner stuck** after stream end: preserve \`tool_result\` from pending snapshot; decouple recovery from assistant-patch branch (by @Cyber0xFE, @zkpaiminmin)
+- Fix **usage cost overstatement**: deduplicate JSONL records by \`message.id\` (~2× inflation fix); correct Opus 4.5/4.6/4.7/4.8 pricing to $5/$25 per 1M tokens (by @t7r5fz7848-lab, @zkpaiminmin)
+- Fix **settings.json env vars** silently overriding reasoning effort, \`MAX_THINKING_TOKENS\`, and 1M context toggle; inject inline \`--settings\` override (by @gadfly3173)
+- Fix **selected reasoning effort** not passed to SDK; thread it through the full send pipeline (by @gadfly3173)
+- Fix **Codex history tool UI** disappearing after restart: unwrap normalized history raw payloads during session restore (by @Luna5ama)
+- Fix Markdown links with **spaces/special characters**: decode percent-encoded and \`file://\` hrefs before opening (by @moritzfl)
+- Fix **XSS via control-character-obfuscated hrefs** (e.g. \`java&#9;script:\`): reject hrefs with C0 control chars in DOMPurify hook (security) (by @zkpaiminmin)
+- Fix **symlink escape** in project-boundary check on native POSIX; route through \`getCanonicalPath\` (security) (by @zkpaiminmin)
+- Fix Codex fast mode, quota cache invalidation on account switch, API-key mode quota display, and other Codex edge cases (by @llanc, @zkpaiminmin)
+- Fix agent group children absorption after history reload; harden \`extractAccumulatedTasks\` for parallel TaskCreate (by @zkpaiminmin)
+
+🔧 Improvements
+- Enhance Bash output rendering with dedicated CSS classes (by @Luna5ama)
+- Add Docker build support (\`Dockerfile\` + \`.dockerignore\`) for reproducible plugin distribution (by @senfix)
+- Split env var groups into \`MODEL_ROUTING_ENV_VARS\` and \`REASONING_CONTROL_ENV_VARS\` to prevent drift (by @gadfly3173)`,
+      zh: `✨ 新功能
+- 新增 **Codex 快速模式**：模型选择器新增「快速」速度模式，映射到 \`service_tier=fast\`（by @llanc）
+- 新增 **Claude Code CLI 路径覆盖**：设置 → 环境中可指定自定义 \`claude\` 可执行文件路径（by @senfix）
+- 设置 → 基础 → 外观新增独立**代码字体**配置：代码块与 Bash 输出使用代码字体，聊天文本跟随 IDEA UI 字体（by @Luna5ama，关闭 #1240）
+- 新增 **Codex 订阅配额面板**：在模型选择器中显示 ChatGPT Plus/Pro 配额，双来源拉取，快照缓存（by @Luna5ama）
+- 新增 **Shift+Esc** 快捷键隐藏 CCG 工具窗口面板（by @Cyber0xFE）
+- **Ctrl+Alt+K** 无论是否有代码选择均可打开 CCG 面板，激活时自动聚焦输入框（by @Cyber0xFE）
+- 每条消息底部新增**逐轮 Token 消耗指示器**（by @suzhelan，@zkpaiminmin）
+- 新增 **SDK 会话转换为 CLI 会话**：SDK 创建的会话可转换以出现在 \`/resume\` 列表，历史列表显示入口徽章（by @gadfly3173）
+- 新增 **Claude Fable 5** 模型（Mythos 级，输入 $10/1M，输出 $50/1M）（by @zkpaiminmin）
+- 集成 **Claude Code Task tracking API**：Agent/任务调用渲染为可折叠分组，展开/折叠状态持久化（by @gadfly3173，@zhuzhihang）
+
+🐛 修复
+- 修复 **WSL2 全套兼容性**：SDK 安装到 WSL 文件系统，权限变量经 WSLENV 跨边界传播，登录 Shell PATH 合并不替换，路径处理迁移至 \`WslPathUtil\`（by @Gazoon007）
+- 修复**工具 spinner 永久卡住**：流结束时保存待处理快照中的 \`tool_result\`，恢复逻辑从 assistant-patch 解耦（by @Cyber0xFE，@zkpaiminmin）
+- 修复**使用量高估**：按 \`message.id\` 去重（约 2× 膨胀）；Opus 4.5/4.6/4.7/4.8 定价修正为 $5/$25 /1M（by @t7r5fz7848-lab，@zkpaiminmin）
+- 修复 **settings.json 环境变量**静默覆盖推理力度、\`MAX_THINKING_TOKENS\` 和 1M 上下文切换（by @gadfly3173）
+- 修复**选择的推理力度**未传递给 SDK（by @gadfly3173）
+- 修复 **Codex 历史工具 UI** 重启后消失（by @Luna5ama）
+- 修复含**空格/特殊字符**的 Markdown 路径链接无法打开（by @moritzfl）
+- 修复**控制字符混淆 href XSS**（如 \`java&#9;script:\`），在 DOMPurify hook 拒绝含 C0 字符的 href（安全）（by @zkpaiminmin）
+- 修复原生 POSIX 上项目边界检查**软链接逃逸**，走 \`getCanonicalPath\`（安全）（by @zkpaiminmin）
+- 修复 Codex 快速模式、切换账户时配额缓存未失效、API 密钥模式配额显示等多处问题（by @llanc，@zkpaiminmin）
+- 修复历史回放后 Agent 分组吸收错误子节点；加固 \`extractAccumulatedTasks\` 对并行 TaskCreate 的处理（by @zkpaiminmin）
+
+🔧 改进
+- 为 Bash 输出渲染引入专用 CSS 类（by @Luna5ama）
+- 新增 Docker 构建支持（\`Dockerfile\` + \`.dockerignore\`）（by @senfix）
+- 将环境变量拆分为 \`MODEL_ROUTING_ENV_VARS\` 和 \`REASONING_CONTROL_ENV_VARS\`，防止独立漂移（by @gadfly3173）`,
+    },
+  },
+  {
     version: '0.4.4',
     date: '2026-05-29',
     content: {

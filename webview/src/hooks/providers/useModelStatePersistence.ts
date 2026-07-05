@@ -8,10 +8,11 @@ import {
   apply1MContextSuffix,
   strip1MContextSuffix,
 } from '../../components/ChatInputBox/types';
-import type { PermissionMode, ReasoningEffort } from '../../components/ChatInputBox/types';
+import type { CodexFastMode, PermissionMode, ReasoningEffort } from '../../components/ChatInputBox/types';
 
 const STORAGE_KEY = 'model-selection-state';
 const REASONING_VALUES = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
+const CODEX_FAST_MODE_VALUES = ['normal', 'fast'] as const;
 
 const getCustomModels = (key: string): { id: string }[] => {
   try {
@@ -25,6 +26,9 @@ const getCustomModels = (key: string): { id: string }[] => {
 const isReasoningEffort = (value: unknown): value is ReasoningEffort =>
   typeof value === 'string' && (REASONING_VALUES as readonly string[]).includes(value);
 
+const isCodexFastMode = (value: unknown): value is CodexFastMode =>
+  typeof value === 'string' && (CODEX_FAST_MODE_VALUES as readonly string[]).includes(value);
+
 export interface UseModelStatePersistenceOptions {
   // Cross-slice load setters (run once on mount)
   setCurrentProvider: (value: string) => void;
@@ -35,6 +39,7 @@ export interface UseModelStatePersistenceOptions {
   setPermissionMode: (value: PermissionMode) => void;
   setLongContextEnabled: (value: boolean) => void;
   setReasoningEffort: (value: ReasoningEffort) => void;
+  setCodexFastMode: (value: CodexFastMode) => void;
   // Cross-slice save deps (re-saves on any change)
   currentProvider: string;
   selectedClaudeModel: string;
@@ -43,6 +48,7 @@ export interface UseModelStatePersistenceOptions {
   codexPermissionMode: PermissionMode;
   longContextEnabled: boolean;
   reasoningEffort: ReasoningEffort;
+  codexFastMode: CodexFastMode;
 }
 
 /**
@@ -51,7 +57,7 @@ export interface UseModelStatePersistenceOptions {
  *     to the backend (retrying until the JCEF bridge is ready).
  *  2. On change: re-save the snapshot to localStorage.
  *
- * Save uses `JSON.stringify` of the seven persisted keys; load applies
+ * Save uses `JSON.stringify` of the persisted keys; load applies
  * defensive validation (custom models lookup, permission mode allowlist,
  * reasoning effort allowlist) before invoking the slice setters.
  */
@@ -65,6 +71,7 @@ export function useModelStatePersistence(options: UseModelStatePersistenceOption
     setPermissionMode,
     setLongContextEnabled,
     setReasoningEffort,
+    setCodexFastMode,
     currentProvider,
     selectedClaudeModel,
     selectedCodexModel,
@@ -72,6 +79,7 @@ export function useModelStatePersistence(options: UseModelStatePersistenceOption
     codexPermissionMode,
     longContextEnabled,
     reasoningEffort,
+    codexFastMode,
   } = options;
 
   // Hydrate from localStorage and sync to backend (mount only).
@@ -80,19 +88,58 @@ export function useModelStatePersistence(options: UseModelStatePersistenceOption
   useEffect(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEY);
+      // Per-tab restore (issue #1353): when the Java backend has loaded a saved
+      // session for this specific tab, it injects __INITIAL_TAB_PROVIDER__ /
+      // __INITIAL_TAB_MODEL__ into the HTML before React boots. Those values
+      // win over the global localStorage snapshot, which is shared across every
+      // tab in the JCEF process and would otherwise cause every CC tab on
+      // restart to be set to whichever provider was last saved by ANY tab.
+      const initialTabProvider = typeof window.__INITIAL_TAB_PROVIDER__ === 'string'
+        ? window.__INITIAL_TAB_PROVIDER__.trim()
+        : '';
+      const initialTabModel = typeof window.__INITIAL_TAB_MODEL__ === 'string'
+        ? window.__INITIAL_TAB_MODEL__.trim()
+        : '';
+      const hasBackendProvider = initialTabProvider === 'claude' || initialTabProvider === 'codex';
+      const hasBackendModel = initialTabModel.length > 0;
+
       let restoredProvider = 'claude';
       let restoredClaudeModel = CLAUDE_MODELS[0].id;
       let restoredCodexModel = CODEX_MODELS[0].id;
-      let restoredClaudePermissionMode: PermissionMode = 'bypassPermissions';
+      let restoredClaudePermissionMode: PermissionMode = 'default';
       let restoredCodexPermissionMode: PermissionMode = 'default';
       let restoredLongContextEnabled = true;
+      let restoredCodexFastMode: CodexFastMode = 'normal';
+
+      // Model validation helpers — close over the restored* lets so both
+      // branches (saved localStorage / fresh backend-only) share the same logic
+      // and each getCustomModels localStorage read happens at most once.
+      const applyClaudeModel = (modelId: string) => {
+        const normalized = normalizeClaudeModelId(strip1MContextSuffix(modelId));
+        const customs = getCustomModels('claude-custom-models');
+        if (CLAUDE_MODELS.find(m => m.id === normalized) || customs.find(m => m.id === normalized)) {
+          restoredClaudeModel = normalized;
+          setSelectedClaudeModel(normalized);
+        }
+      };
+      const applyCodexModel = (modelId: string) => {
+        const customs = getCustomModels('codex-custom-models');
+        if (CODEX_MODELS.find(m => m.id === modelId) || customs.find(m => m.id === modelId)) {
+          restoredCodexModel = modelId;
+          setSelectedCodexModel(modelId);
+        }
+      };
 
       if (saved) {
         const state = JSON.parse(saved);
 
-        if (['claude', 'codex'].includes(state.provider)) {
-          restoredProvider = state.provider;
-          setCurrentProvider(state.provider);
+        // Backend-supplied provider wins. We still fall through the rest of the
+        // hydration so non-provider preferences (permission mode, reasoning
+        // effort, codex fast mode, …) are restored from localStorage.
+        const providerCandidate = hasBackendProvider ? initialTabProvider : state.provider;
+        if (['claude', 'codex'].includes(providerCandidate)) {
+          restoredProvider = providerCandidate;
+          setCurrentProvider(providerCandidate);
         }
 
         if (isValidPermissionMode(state.claudePermissionMode)) {
@@ -112,25 +159,28 @@ export function useModelStatePersistence(options: UseModelStatePersistenceOption
         if (isReasoningEffort(state.reasoningEffort)) {
           setReasoningEffort(state.reasoningEffort);
         }
-
-        const savedClaudeCustomModels = getCustomModels('claude-custom-models');
-        const strippedClaudeModel = strip1MContextSuffix(state.claudeModel);
-        const normalizedClaudeModel = normalizeClaudeModelId(strippedClaudeModel);
-        if (
-          CLAUDE_MODELS.find(m => m.id === normalizedClaudeModel) ||
-          savedClaudeCustomModels.find(m => m.id === normalizedClaudeModel)
-        ) {
-          restoredClaudeModel = normalizedClaudeModel;
-          setSelectedClaudeModel(normalizedClaudeModel);
+        if (isCodexFastMode(state.codexFastMode)) {
+          restoredCodexFastMode = state.codexFastMode;
+          setCodexFastMode(restoredCodexFastMode);
         }
 
-        const savedCodexCustomModels = getCustomModels('codex-custom-models');
-        if (
-          CODEX_MODELS.find(m => m.id === state.codexModel) ||
-          savedCodexCustomModels.find(m => m.id === state.codexModel)
-        ) {
-          restoredCodexModel = state.codexModel;
-          setSelectedCodexModel(state.codexModel);
+        const claudeModelCandidate = hasBackendModel && restoredProvider === 'claude'
+          ? initialTabModel
+          : state.claudeModel;
+        applyClaudeModel(claudeModelCandidate);
+
+        const codexModelCandidate = hasBackendModel && restoredProvider === 'codex'
+          ? initialTabModel
+          : state.codexModel;
+        applyCodexModel(codexModelCandidate);
+      } else if (hasBackendProvider) {
+        // No localStorage yet (fresh user) but backend supplied a provider:
+        // honor it so the tab starts with the right provider.
+        restoredProvider = initialTabProvider;
+        setCurrentProvider(initialTabProvider);
+        if (hasBackendModel) {
+          if (initialTabProvider === 'claude') applyClaudeModel(initialTabModel);
+          else if (initialTabProvider === 'codex') applyCodexModel(initialTabModel);
         }
       }
 
@@ -152,6 +202,7 @@ export function useModelStatePersistence(options: UseModelStatePersistenceOption
             : apply1MContextSuffix(restoredClaudeModel, restoredLongContextEnabled);
           sendBridgeEvent('set_model', modelToSync);
           sendBridgeEvent('set_mode', initialPermissionMode);
+          sendBridgeEvent('set_codex_fast_mode', restoredCodexFastMode);
         } else {
           syncRetryCount++;
           if (syncRetryCount < MAX_SYNC_RETRIES) {
@@ -177,6 +228,7 @@ export function useModelStatePersistence(options: UseModelStatePersistenceOption
         codexPermissionMode,
         longContextEnabled,
         reasoningEffort,
+        codexFastMode,
       }));
     } catch {
       // Failed to save model selection state — non-fatal.
@@ -189,5 +241,6 @@ export function useModelStatePersistence(options: UseModelStatePersistenceOption
     codexPermissionMode,
     longContextEnabled,
     reasoningEffort,
+    codexFastMode,
   ]);
 }

@@ -81,7 +81,10 @@
     "disabled": "Desativado",
     "sdkNotInstalled": "O SDK de {{provider}} não está instalado. Por favor, instale o SDK para iniciar o chat.",
     "sdkStatusLoading": "Verificando status do SDK...",
-    "openSourceBanner": "Este projeto é garantidamente 100% open source (cuidado com projetos piratas)",
+    "openSourceBanner": "Este projeto é garantidamente 100% open source e gratuito (cuidado com projetos piratas)",
+    "openSourceBannerStar": "Star",
+    "openSourceBannerStarToast": "Link copiado para a área de transferência — cole no navegador para acessar ⭐",
+    "openSourceBannerStarAria": "Copiar link e dar uma estrela no GitHub",
     "goInstallSdk": "Ir para Instalação",
     "commandNotImplemented": "O recurso `{{command}}` ainda não foi implementado.",
     "clearCommandDescription": "Limpar histórico de conversa e iniciar uma nova sessão",
@@ -91,6 +94,8 @@
     "streamingConnected": "{{provider}} conectado, entendendo sua pergunta",
     "showEarlierMessages": "Mostrar {{count}} mensagens anteriores",
     "totalDuration": "Esta resposta levou",
+    "tokenUsage": "{{input}} entrada / {{output}} saída",
+    "tokenUsageDetail": "Total do turno — entrada {{input}} · gravação de cache {{cacheWrite}} · leitura de cache {{cacheRead}} · saída {{output}}",
     "search": {
       "ariaLabel": "Pesquisar na conversa",
       "placeholder": "Pesquisar na conversa…",
@@ -158,6 +163,11 @@
         "hintText": "para obter o caminho real do executável Node.js. Deixe vazio para detecção automática.",
         "versionTooLow": "A versão do Node.js é muito baixa. O plugin requer v{{minVersion}} ou superior para funcionar corretamente"
       },
+      "claudeCliPath": {
+        "label": "Caminho do CLI do Claude (substituição)",
+        "placeholder": "ex. /usr/local/bin/claude — deixe vazio para usar o SDK integrado",
+        "hint": "Opcional. Quando definido, o plugin executa este binário em vez do @anthropic-ai/claude-agent-sdk integrado. O daemon reinicia ao salvar."
+      },
       "workingDirectory": {
         "label": "Diretório de Trabalho",
         "placeholder": "ex: projeto1 ou deixe vazio para usar a raiz do projeto",
@@ -173,16 +183,28 @@
         "level6": "Muito Grande (140%)"
       },
       "editorFont": {
-        "label": "Fonte",
-        "hint": "Aqui você altera a fonte da interface do plugin; o tamanho e o espaçamento entre linhas continuam seguindo o editor.",
-        "followOption": "Seguir editor ({{font}})",
-        "customOption": "Arquivo de fonte personalizado",
-        "customPathLabel": "Caminho do arquivo de fonte",
-        "customPathPlaceholder": "Escolha ou digite o caminho de um arquivo .ttf / .otf",
+        "label": "Fonte da UI",
+        "hint": "Aqui você altera a fonte da interface do plugin; o código pode usar uma fonte separada.",
+        "followOption": "Seguir a fonte UI do IDEA ({{font}})",
+        "customOption": "Arquivo de fonte da UI personalizado",
+        "customPathLabel": "Caminho do arquivo de fonte da UI",
+        "customPathPlaceholder": "Escolha ou digite o caminho de um arquivo .ttf / .otf para a fonte da UI",
         "browse": "Procurar",
-        "warningUnavailable": "A fonte está indisponível, usando a fonte do editor",
+        "warningUnavailable": "A fonte da UI está indisponível, usando a fonte da UI do IDEA",
+        "statusFollowEditor": "Usando atualmente a fonte da UI do IDEA: {{font}}",
+        "statusCustom": "Usando atualmente a fonte da UI personalizada: {{font}}"
+      },
+      "codeFont": {
+        "label": "Fonte de código",
+        "hint": "O código Markdown e os blocos de comando usam esta fonte.",
+        "followOption": "Seguir a fonte do editor ({{font}})",
+        "customOption": "Arquivo de fonte de código personalizado",
+        "customPathLabel": "Caminho do arquivo de fonte de código",
+        "customPathPlaceholder": "Escolha ou digite o caminho de um arquivo .ttf / .otf para a fonte de código",
+        "browse": "Procurar",
+        "warningUnavailable": "A fonte de código está indisponível, usando a fonte do editor",
         "statusFollowEditor": "Usando atualmente a fonte do editor: {{font}}",
-        "statusCustom": "Usando atualmente a fonte personalizada: {{font}}"
+        "statusCustom": "Usando atualmente a fonte de código personalizada: {{font}}"
       },
       "streaming": {
         "label": "Streaming",
@@ -361,7 +383,7 @@
     "codexPermissionsDesc": "Gerenciar permissões e políticas de sandbox do Codex",
     "permissionsPanel": {
       "codexSandboxTitle": "Modo Sandbox do Codex",
-      "codexSandboxDesc": "Controlar os limites de acesso ao sistema quando o Codex executa comandos. O padrão é danger-full-access. Mude para workspace-write para um sandbox mais restrito.",
+      "codexSandboxDesc": "Controlar os limites de acesso ao sistema quando o Codex executa comandos. O padrão é o workspace-write mais seguro (leitura/escrita apenas no espaço de trabalho). Mude para danger-full-access para comandos de nível de sistema como adb ou docker.",
       "workspaceWriteTitle": "workspace-write",
       "workspaceWriteDesc": "Leitura/escrita limitada ao workspace. Operações de nível de sistema são restritas por segurança.",
       "fullAccessTitle": "danger-full-access",
@@ -712,50 +734,50 @@
       }
     },
     "agent": {
-      "title": "Agentes",
+      "title": "Prompts",
       "create": "Criar",
       "export": "Exportar",
       "import": "Importar",
-      "createAgent": "Criar Agente",
-      "createAgentHint": "Clique para ir à página de configurações de agentes para criar",
-      "customAgents": "Agentes Personalizados",
-      "noAgents": "Sem agentes personalizados",
-      "noAgentsDropdown": "Sem agentes",
+      "createAgent": "Criar Prompt",
+      "createAgentHint": "Clique para ir à página de configurações de prompts para criar",
+      "customAgents": "Prompts Personalizados",
+      "noAgents": "Sem prompts personalizados",
+      "noAgentsDropdown": "Sem prompts",
       "loadFailed": "Falha ao carregar",
       "loading": "Carregando...",
       "menu": "Menu",
-      "addSuccess": "Agente criado com sucesso",
-      "updateSuccess": "Agente atualizado com sucesso",
-      "deleteSuccess": "Agente excluído com sucesso",
+      "addSuccess": "Prompt criado com sucesso",
+      "updateSuccess": "Prompt atualizado com sucesso",
+      "deleteSuccess": "Prompt excluído com sucesso",
       "operationSuccess": "Operação bem-sucedida",
       "operationFailed": "Operação falhou",
       "deleteConfirmTitle": "Confirmar Exclusão",
-      "deleteConfirmMessage": "Tem certeza que deseja excluir o agente \"{{name}}\"? Esta ação não pode ser desfeita.",
-      "clearAgent": "Limpar agente selecionado",
+      "deleteConfirmMessage": "Tem certeza que deseja excluir o prompt \"{{name}}\"? Esta ação não pode ser desfeita.",
+      "clearAgent": "Limpar prompt selecionado",
       "dialog": {
-        "addTitle": "Criar Agente",
-        "editTitle": "Editar Agente",
+        "addTitle": "Criar Prompt",
+        "editTitle": "Editar Prompt",
         "name": "Nome",
-        "namePlaceholder": "Insira o nome do agente",
-        "nameRequired": "Por favor, insira o nome do agente",
+        "namePlaceholder": "Insira o nome do prompt",
+        "nameRequired": "Por favor, insira o nome do prompt",
         "prompt": "Prompt",
-        "promptPlaceholder": "Insira o papel, tom, fluxo de trabalho, preferências de ferramentas e regras do agente. (Opcional)",
+        "promptPlaceholder": "Insira o papel, tom, fluxo de trabalho, preferências de ferramentas e regras do prompt. (Opcional)",
         "promptHint": "O prompt será enviado à IA como instrução de sistema no início da conversa",
         "confirmAdd": "Criar",
         "saveChanges": "Salvar"
       },
       "importDialog": {
-        "title": "Importar Agentes",
-        "selectItems": "Selecionar agentes para importar",
-        "summary": "Total de {{total}} agentes:",
+        "title": "Importar Prompts",
+        "selectItems": "Selecionar prompts para importar",
+        "summary": "Total de {{total}} prompts:",
         "newCount": "{{count}} novos",
         "updateCount": "{{count}} atualizações",
         "selectedCount": "{{count}} itens selecionados",
         "conflictStrategy": "Estratégia de Resolução de Conflito",
         "strategySkip": "Pular",
-        "strategySkipDesc": "Pular agentes existentes",
+        "strategySkipDesc": "Pular prompts existentes",
         "strategyOverwrite": "Sobrescrever",
-        "strategyOverwriteDesc": "Sobrescrever agentes existentes",
+        "strategyOverwriteDesc": "Sobrescrever prompts existentes",
         "strategyDuplicate": "Duplicar",
         "strategyDuplicateDesc": "Criar duplicatas (gerar novos IDs)",
         "conflictWarning": "{{count}} conflitos detectados",
@@ -764,19 +786,19 @@
         "columnStatus": "Status",
         "statusNew": "Novo",
         "statusUpdate": "Atualizar",
-        "importSuccess": "{{count}} agentes importados com sucesso",
+        "importSuccess": "{{count}} prompts importados com sucesso",
         "importFailed": "Falha na importação",
         "importPartialSuccess": "Importados {{imported}}, pulados {{skipped}}, atualizados {{updated}}",
-        "noItemsSelected": "Por favor, selecione ao menos um agente",
+        "noItemsSelected": "Por favor, selecione ao menos um prompt",
         "confirmImport": "Confirmar Importação",
-        "exportSuccess": "Agentes exportados com sucesso",
+        "exportSuccess": "Prompts exportados com sucesso",
         "exportFailed": "Falha na exportação",
         "importFileError": "Falha ao ler arquivo",
         "invalidFileFormat": "Formato de arquivo inválido"
       },
       "exportDialog": {
-        "title": "Exportar Agentes",
-        "selectHint": "Selecionar agentes para exportar",
+        "title": "Exportar Prompts",
+        "selectHint": "Selecionar prompts para exportar",
         "confirmExport": "Confirmar Exportação"
       }
     },
@@ -904,6 +926,12 @@
     "copySessionId": "Copiar ID da sessão para CLI resume",
     "sessionIdCopied": "ID da sessão copiado",
     "copyFailed": "Falha ao copiar",
+    "convertToCliSession": "Converter para sessão reconhecida pelo CLI",
+    "convertButton": "Converter p/ CLI",
+    "convertSuccess": "Sessão convertida para ser reconhecida pelo CLI",
+    "convertFailed": "Falha na conversão",
+    "confirmConvert": "Converter para sessão CLI?",
+    "convertConfirmMessage": "Isso modificará o entrypoint da sessão para torná-la visível na lista /resume do CLI do Claude Code.",
     "timeAgo": {
       "yearsAgo": "anos atrás",
       "monthsAgo": "meses atrás",
@@ -911,12 +939,33 @@
       "hoursAgo": "horas atrás",
       "minutesAgo": "minutos atrás",
       "secondsAgo": "segundos atrás"
+    },
+    "conversionErrors": {
+      "INVALID_SESSION_ID": "ID de sessão inválido",
+      "SESSION_ACTIVE": "Não é possível converter a sessão atualmente ativa. Inicie uma nova sessão primeiro e depois converta esta",
+      "SESSION_NOT_FOUND": "Arquivo de sessão não encontrado",
+      "FILE_NOT_EXIST": "O arquivo de sessão não existe",
+      "FILE_LOCKED": "O arquivo de sessão está sendo acessado por outro processo",
+      "NOT_SDK_SESSION": "Esta sessão não foi criada pelo SDK (entrypoint não é sdk-cli)",
+      "ALREADY_CLI_SESSION": "Esta sessão já é uma sessão CLI",
+      "CONVERSION_FAILED": "Falha na conversão, tente novamente mais tarde"
+    },
+    "entrypointLabel": {
+      "sdk-cli": "Sessão SDK",
+      "claude-vscode": "VS Code",
+      "remote": "Remoto"
+    },
+    "entrypointTooltip": {
+      "sdk-cli": "Esta sessão foi criada pelo plugin via SDK e não é mostrada no CLI por padrão. Clique em 'Converter para CLI' para fazê-la aparecer na lista /resume do CLI do terminal",
+      "claude-vscode": "Esta sessão foi criada pela extensão do VS Code e não é mostrada no CLI por padrão. Clique em 'Converter para CLI' para fazê-la aparecer na lista /resume do CLI do terminal",
+      "remote": "Esta sessão foi criada por uma instância remota do Claude Code"
     }
   },
   "permission": {
     "dialogTitle": "Solicitação de Permissão",
     "allow": "Permitir Uma Vez",
     "allowAlways": "Sempre Permitir",
+    "allowAlwaysCommand": "Sempre Permitir Este Comando",
     "deny": "Negar",
     "userDenied": "Usuário negou a solicitação de permissão",
     "fromExternalProcess": "Solicitação de processo externo",
@@ -1456,6 +1505,9 @@
   },
   "models": {
     "addModel": "Adicionar Modelo",
+    "searchPlaceholder": "Pesquisar modelos",
+    "noModelsFound": "Nenhum modelo encontrado",
+    "hiddenModelCount": "+ {{count}} modelos adicionais. Digite para pesquisar.",
     "claude": {
       "sonnet46": {
         "label": "Sonnet 4.6",
@@ -1476,6 +1528,10 @@
       "opus48": {
         "label": "Opus 4.8",
         "description": "Opus 4.8 · O mais recente e capaz"
+      },
+      "fable5": {
+        "label": "Fable 5",
+        "description": "Fable 5 · O mais poderoso · classe Mythos"
       }
     },
     "longContext": {
