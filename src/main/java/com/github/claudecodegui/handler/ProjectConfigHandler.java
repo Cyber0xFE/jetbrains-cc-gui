@@ -256,6 +256,24 @@ public class ProjectConfigHandler {
             "Failed to save auto open file config");
     }
 
+    public void handleGetAutoSaveFilesEnabled() {
+        respondWithJson("window.updateAutoSaveFilesEnabled",
+            () -> {
+                String projectPath = context.getProject().getBasePath();
+                boolean enabled = projectPath != null && settingsService.getAutoSaveFilesEnabled(projectPath);
+                return jsonOf("autoSaveFilesEnabled", enabled);
+            },
+            jsonOf("autoSaveFilesEnabled", false),
+            "Failed to get auto save files enabled");
+    }
+
+    public void handleSetAutoSaveFilesEnabled(String content) {
+        handleProjectBooleanToggle(content, "autoSaveFilesEnabled", false, "auto save files enabled",
+            settingsService::setAutoSaveFilesEnabled,
+            "window.updateAutoSaveFilesEnabled",
+            "Failed to save auto save files config");
+    }
+
     public void handleGetPermissionDialogTimeout() {
         respondWithJson("window.updatePermissionDialogTimeout",
             () -> jsonOf("permissionDialogTimeoutSeconds", settingsService.getPermissionDialogTimeoutSeconds()),

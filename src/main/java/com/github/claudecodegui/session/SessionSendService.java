@@ -12,6 +12,7 @@ import com.intellij.openapi.diagnostic.Logger;
 import com.intellij.openapi.editor.Document;
 import com.intellij.openapi.fileEditor.FileDocumentManager;
 import com.intellij.openapi.project.Project;
+import com.intellij.openapi.ui.Messages;
 import com.intellij.openapi.vfs.LocalFileSystem;
 import com.intellij.openapi.vfs.VirtualFile;
 
@@ -339,6 +340,7 @@ public class SessionSendService {
         }
 
         List<Document> unsavedDocs = new ArrayList<>();
+        List<String> unsavedPaths = new ArrayList<>();
         Pattern fileRefPattern = Pattern.compile("@(\\S+)");
         Matcher matcher = fileRefPattern.matcher(messageText);
 
@@ -357,19 +359,58 @@ public class SessionSendService {
                 Document doc = fdm.getDocument(vf);
                 if (doc != null && fdm.isDocumentUnsaved(doc)) {
                     unsavedDocs.add(doc);
+                    unsavedPaths.add(vf.getPath());
                 }
             }
         });
 
-        if (!unsavedDocs.isEmpty()) {
-            ApplicationManager.getApplication().invokeAndWait(() -> {
-                FileDocumentManager fdm = FileDocumentManager.getInstance();
-                for (Document doc : unsavedDocs) {
-                    fdm.saveDocument(doc);
-                }
-            });
-            LOG.info("[AutoSave] Saved " + unsavedDocs.size() + " unsaved file(s) referenced by @ mentions");
+        if (unsavedDocs.isEmpty()) {
+            return;
         }
+
+        boolean autoSaveEnabled = readAutoSaveFilesEnabled();
+
+        ApplicationManager.getApplication().invokeAndWait(() -> {
+            if (!autoSaveEnabled) {
+                StringBuilder sb = new StringBuilder("以下文件尚未保存：\n");
+                for (String path : unsavedPaths) {
+                    sb.append("  • ").append(path).append("\n");
+                }
+                sb.append("\n是否保存后再发送？");
+
+                int result = Messages.showYesNoDialog(
+                        project,
+                        sb.toString(),
+                        "未保存的文件",
+                        Messages.getQuestionIcon()
+                );
+                if (result != Messages.YES) {
+                    LOG.info("[AutoSave] User declined to save " + unsavedDocs.size()
+                            + " unsaved file(s), proceeding without saving");
+                    return;
+                }
+            }
+
+            FileDocumentManager fdm = FileDocumentManager.getInstance();
+            for (Document doc : unsavedDocs) {
+                fdm.saveDocument(doc);
+            }
+        });
+
+        LOG.info("[AutoSave] Saved " + unsavedDocs.size() + " unsaved file(s) referenced by @ mentions");
+    }
+
+    private boolean readAutoSaveFilesEnabled() {
+        try {
+            String projectPath = project.getBasePath();
+            if (projectPath != null) {
+                CodemossSettingsService settingsService = new CodemossSettingsService();
+                return settingsService.getAutoSaveFilesEnabled(projectPath);
+            }
+        } catch (Exception e) {
+            LOG.warn("[AutoSave] Failed to read autoSaveFilesEnabled setting: " + e.getMessage());
+        }
+        return false;
     }
 
     private boolean readAutoOpenFileEnabled() {

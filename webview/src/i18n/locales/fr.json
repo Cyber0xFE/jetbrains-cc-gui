@@ -218,6 +218,12 @@
         "disabled": "Désactivé",
         "hint": "Lorsqu'activé, sélectionner un fichier dans l'arborescence du projet enverra automatiquement son chemin à l'AI (note : seul le chemin du fichier est envoyé, pas son contenu). Lorsque désactivé, une action manuelle est requise."
       },
+      "autoSaveFiles": {
+        "label": "Sauvegarde automatique des fichiers @",
+        "enabled": "Activé",
+        "disabled": "Désactivé",
+        "hint": "Lorsqu'activé, les fichiers référencés via @ avec des modifications non sauvegardées seront sauvegardés automatiquement sans dialogue de confirmation."
+      },
       "promptEnhancer": {
         "label": "Prompt Enhancer",
         "modelLabel": "Enhancer Model",

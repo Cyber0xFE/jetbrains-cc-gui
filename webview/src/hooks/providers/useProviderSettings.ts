@@ -21,6 +21,7 @@ export function useProviderSettings({ addToast, t }: UseProviderSettingsOptions)
   const [streamingEnabledSetting, setStreamingEnabledSetting] = useState(true);
   const [sendShortcut, setSendShortcut] = useState<'enter' | 'cmdEnter'>('enter');
   const [autoOpenFileEnabled, setAutoOpenFileEnabled] = useState(false);
+  const [autoSaveFilesEnabled, setAutoSaveFilesEnabled] = useState(false);
   const [selectedAgent, setSelectedAgent] = useState<SelectedAgent | null>(null);
   const [activeProviderConfig, setActiveProviderConfig] = useState<ProviderConfig | null>(null);
   const [, setProviderConfigVersion] = useState(0);
@@ -100,6 +101,15 @@ export function useProviderSettings({ addToast, t }: UseProviderSettingsOptions)
     );
   }, [t, addToast]);
 
+  const handleAutoSaveFilesEnabledChange = useCallback((enabled: boolean) => {
+    setAutoSaveFilesEnabled(enabled);
+    sendBridgeEvent('set_auto_save_files_enabled', JSON.stringify({ autoSaveFilesEnabled: enabled }));
+    addToast(
+      enabled ? t('settings.basic.autoSaveFiles.enabled') : t('settings.basic.autoSaveFiles.disabled'),
+      'success',
+    );
+  }, [t, addToast]);
+
   return {
     streamingEnabledSetting,
     setStreamingEnabledSetting,
@@ -107,6 +117,8 @@ export function useProviderSettings({ addToast, t }: UseProviderSettingsOptions)
     setSendShortcut,
     autoOpenFileEnabled,
     setAutoOpenFileEnabled,
+    autoSaveFilesEnabled,
+    setAutoSaveFilesEnabled,
     selectedAgent,
     setSelectedAgent,
     activeProviderConfig,
@@ -117,6 +129,7 @@ export function useProviderSettings({ addToast, t }: UseProviderSettingsOptions)
     handleStreamingEnabledChange,
     handleSendShortcutChange,
     handleAutoOpenFileEnabledChange,
+    handleAutoSaveFilesEnabledChange,
   };
 }
 

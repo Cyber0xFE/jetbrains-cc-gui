@@ -222,6 +222,12 @@
         "disabled": "Disabled",
         "hint": "When enabled, selecting a file in the project tree will automatically send its file path to AI (note: only the file path is sent, not the file content). When disabled, manual action is required."
       },
+      "autoSaveFiles": {
+        "label": "Auto-Save Referenced Files",
+        "enabled": "Enabled",
+        "disabled": "Disabled",
+        "hint": "When enabled, files referenced via @ mentions with unsaved changes will be saved automatically without confirmation dialog."
+      },
       "promptEnhancer": {
         "label": "Prompt Enhancer",
         "modelLabel": "Enhancer Model",

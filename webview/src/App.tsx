@@ -149,6 +149,7 @@ const App = () => {
     currentProviderRef,
     activeProviderConfig, claudeSettingsAlwaysThinkingEnabled,
     reasoningEffort, codexFastMode, streamingEnabledSetting, sendShortcut, autoOpenFileEnabled,
+    autoSaveFilesEnabled,
     longContextEnabled,
     usagePercentage, usageUsedTokens, usageMaxTokens,
     setPermissionMode,
@@ -156,14 +157,14 @@ const App = () => {
     setSelectedClaudeModel, setSelectedCodexModel,
     setProviderConfigVersion, setActiveProviderConfig,
     setClaudeSettingsAlwaysThinkingEnabled, setStreamingEnabledSetting,
-    setSendShortcut, setAutoOpenFileEnabled,
+    setSendShortcut, setAutoOpenFileEnabled, setAutoSaveFilesEnabled,
     setSdkStatus, setSdkStatusLoaded, setSelectedAgent,
     setUsagePercentage, setUsageUsedTokens, setUsageMaxTokens,
     syncActiveProviderModelMapping,
     handleModeSelect, handleModelSelect, handleProviderSelect,
     handleReasoningChange, handleCodexFastModeChange, handleAgentSelect, handleToggleThinking,
     handleStreamingEnabledChange, handleSendShortcutChange,
-    handleAutoOpenFileEnabledChange, handleLongContextChange,
+    handleAutoOpenFileEnabledChange, handleAutoSaveFilesEnabledChange, handleLongContextChange,
   } = useModelProviderState({ addToast, t });
 
   // ── Global drag event interception ──
@@ -280,7 +281,7 @@ const App = () => {
     setSelectedClaudeModel, setSelectedCodexModel,
     setProviderConfigVersion, setActiveProviderConfig,
     setClaudeSettingsAlwaysThinkingEnabled, setStreamingEnabledSetting,
-    setSendShortcut, setAutoOpenFileEnabled,
+    setSendShortcut, setAutoOpenFileEnabled, setAutoSaveFilesEnabled,
     setSdkStatus, setSdkStatusLoaded,
     setIsRewinding, setRewindDialogOpen, setCurrentRewindRequest,
     setContextInfo, setSelectedAgent,
@@ -477,6 +478,8 @@ const App = () => {
           onSendShortcutChange={handleSendShortcutChange}
           autoOpenFileEnabled={autoOpenFileEnabled}
           onAutoOpenFileEnabledChange={handleAutoOpenFileEnabledChange}
+          autoSaveFilesEnabled={autoSaveFilesEnabled}
+          onAutoSaveFilesEnabledChange={handleAutoSaveFilesEnabledChange}
           permissionDialogTimeoutSeconds={permissionDialogTimeoutSeconds}
           onPermissionDialogTimeoutChange={setPermissionDialogTimeoutSeconds}
         />

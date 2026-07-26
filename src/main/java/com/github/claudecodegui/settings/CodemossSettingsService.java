@@ -776,6 +776,60 @@ public class CodemossSettingsService {
         LOG.info("[CodemossSettings] Set auto open file enabled to " + enabled + " for project: " + projectPath);
     }
 
+    // ==================== Auto Save Files Config Management ====================
+
+    /**
+     * Get auto-save-files configuration.
+     *
+     * @param projectPath project path
+     * @return whether auto-save files is enabled (skip confirmation dialog)
+     */
+    public boolean getAutoSaveFilesEnabled(String projectPath) throws IOException {
+        JsonObject config = readConfig();
+
+        if (!config.has("autoSaveFiles")) {
+            return false;
+        }
+
+        JsonObject autoSaveFiles = config.getAsJsonObject("autoSaveFiles");
+
+        if (projectPath != null && autoSaveFiles.has(projectPath)) {
+            return autoSaveFiles.get(projectPath).getAsBoolean();
+        }
+
+        if (autoSaveFiles.has("default")) {
+            return autoSaveFiles.get("default").getAsBoolean();
+        }
+
+        return false;
+    }
+
+    /**
+     * Set auto-save-files configuration.
+     *
+     * @param projectPath project path
+     * @param enabled     whether to enable auto-save (skip confirmation dialog)
+     */
+    public void setAutoSaveFilesEnabled(String projectPath, boolean enabled) throws IOException {
+        JsonObject config = readConfig();
+
+        JsonObject autoSaveFiles;
+        if (config.has("autoSaveFiles")) {
+            autoSaveFiles = config.getAsJsonObject("autoSaveFiles");
+        } else {
+            autoSaveFiles = new JsonObject();
+            config.add("autoSaveFiles", autoSaveFiles);
+        }
+
+        if (projectPath != null) {
+            autoSaveFiles.addProperty(projectPath, enabled);
+        }
+        autoSaveFiles.addProperty("default", enabled);
+
+        writeConfig(config);
+        LOG.info("[CodemossSettings] Set auto save files enabled to " + enabled + " for project: " + projectPath);
+    }
+
     // ==================== Codex Sandbox Mode Config Management ====================
 
     /**

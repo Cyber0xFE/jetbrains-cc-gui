@@ -218,6 +218,12 @@
         "disabled": "Desativado",
         "hint": "Quando ativado, selecionar um arquivo na árvore do projeto enviará automaticamente o caminho do arquivo para a IA (atenção: apenas o caminho é enviado, não o conteúdo). Quando desativado, é necessária ação manual."
       },
+      "autoSaveFiles": {
+        "label": "Salvar Automaticamente Arquivos @",
+        "enabled": "Ativado",
+        "disabled": "Desativado",
+        "hint": "Quando ativado, arquivos referenciados via @ com alterações não salvas serão salvos automaticamente sem diálogo de confirmação."
+      },
       "promptEnhancer": {
         "label": "Prompt Enhancer",
         "modelLabel": "Enhancer Model",

@@ -218,6 +218,12 @@
         "disabled": "Desactivado",
         "hint": "Al activar, seleccionar un archivo en el árbol del proyecto enviará automáticamente su ruta al AI (nota: solo se envía la ruta del archivo, no su contenido). Al desactivar, se requiere acción manual."
       },
+      "autoSaveFiles": {
+        "label": "Guardar automáticamente archivos @",
+        "enabled": "Activado",
+        "disabled": "Desactivado",
+        "hint": "Al activar, los archivos referenciados mediante @ con cambios no guardados se guardarán automáticamente sin diálogo de confirmación."
+      },
       "promptEnhancer": {
         "label": "Prompt Enhancer",
         "modelLabel": "Enhancer Model",

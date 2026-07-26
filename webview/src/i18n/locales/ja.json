@@ -218,6 +218,12 @@
         "disabled": "無効",
         "hint": "有効にすると、プロジェクトツリーでファイルを選択した際に自動的にファイルパスを AI に送信します（注意：ファイルパスのみ送信され、ファイル内容は送信されません）。無効時は手動操作が必要です。"
       },
+      "autoSaveFiles": {
+        "label": "@ 参照ファイルを自動保存",
+        "enabled": "有効",
+        "disabled": "無効",
+        "hint": "有効にすると、@ で参照された未保存ファイルは確認ダイアログなしで自動保存されます。"
+      },
       "promptEnhancer": {
         "label": "Prompt Enhancer",
         "modelLabel": "Enhancer Model",

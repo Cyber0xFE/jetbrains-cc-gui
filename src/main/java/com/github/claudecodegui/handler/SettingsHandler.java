@@ -60,6 +60,8 @@ public class SettingsHandler extends BaseMessageHandler {
         "set_send_shortcut",
         "get_auto_open_file_enabled",
         "set_auto_open_file_enabled",
+        "get_auto_save_files_enabled",
+        "set_auto_save_files_enabled",
         "get_permission_dialog_timeout",
         "set_permission_dialog_timeout",
         "get_commit_generation_enabled",
@@ -222,6 +224,12 @@ public class SettingsHandler extends BaseMessageHandler {
                 return true;
             case "set_auto_open_file_enabled":
                 projectConfigHandler.handleSetAutoOpenFileEnabled(content);
+                return true;
+            case "get_auto_save_files_enabled":
+                projectConfigHandler.handleGetAutoSaveFilesEnabled();
+                return true;
+            case "set_auto_save_files_enabled":
+                projectConfigHandler.handleSetAutoSaveFilesEnabled(content);
                 return true;
             case "get_permission_dialog_timeout":
                 projectConfigHandler.handleGetPermissionDialogTimeout();

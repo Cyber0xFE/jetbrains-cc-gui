@@ -53,6 +53,9 @@ interface BasicConfigSectionProps {
   // Auto open file configuration
   autoOpenFileEnabled?: boolean;
   onAutoOpenFileEnabledChange?: (enabled: boolean) => void;
+  // Auto save files configuration
+  autoSaveFilesEnabled?: boolean;
+  onAutoSaveFilesEnabledChange?: (enabled: boolean) => void;
   // Send shortcut configuration
   sendShortcut?: 'enter' | 'cmdEnter';
   onSendShortcutChange?: (shortcut: 'enter' | 'cmdEnter') => void;
@@ -159,6 +162,8 @@ const BasicConfigSection = (props: BasicConfigSectionProps) => {
           onStreamingEnabledChange={props.onStreamingEnabledChange}
           autoOpenFileEnabled={props.autoOpenFileEnabled}
           onAutoOpenFileEnabledChange={props.onAutoOpenFileEnabledChange}
+          autoSaveFilesEnabled={props.autoSaveFilesEnabled}
+          onAutoSaveFilesEnabledChange={props.onAutoSaveFilesEnabledChange}
           diffExpandedByDefault={props.diffExpandedByDefault}
           onDiffExpandedByDefaultChange={props.onDiffExpandedByDefaultChange}
           commitGenerationEnabled={props.commitGenerationEnabled}

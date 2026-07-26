@@ -218,6 +218,12 @@
         "disabled": "비활성화",
         "hint": "활성화하면 프로젝트 트리에서 파일을 선택할 때 자동으로 파일 경로를 AI에 전송합니다 (참고: 파일 경로만 전송되며 파일 내용은 전송되지 않습니다). 비활성화하면 수동 조작이 필요합니다."
       },
+      "autoSaveFiles": {
+        "label": "@ 참조 파일 자동 저장",
+        "enabled": "활성화",
+        "disabled": "비활성화",
+        "hint": "활성화하면 @ 로 참조된 저장되지 않은 파일이 확인 대화상자 없이 자동으로 저장됩니다."
+      },
       "promptEnhancer": {
         "label": "Prompt Enhancer",
         "modelLabel": "Enhancer Model",

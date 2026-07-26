@@ -51,6 +51,9 @@ interface SettingsViewProps {
   // Auto open file configuration (passed from App.tsx for state sync)
   autoOpenFileEnabled?: boolean;
   onAutoOpenFileEnabledChange?: (enabled: boolean) => void;
+  // Auto save files configuration (passed from App.tsx for state sync)
+  autoSaveFilesEnabled?: boolean;
+  onAutoSaveFilesEnabledChange?: (enabled: boolean) => void;
   // Permission dialog timeout configuration (passed from App.tsx for state sync)
   permissionDialogTimeoutSeconds?: number;
   onPermissionDialogTimeoutChange?: (seconds: number) => void;
@@ -66,6 +69,8 @@ const SettingsView = ({
   onSendShortcutChange: onSendShortcutChangeProp,
   autoOpenFileEnabled: autoOpenFileEnabledProp,
   onAutoOpenFileEnabledChange: onAutoOpenFileEnabledChangeProp,
+  autoSaveFilesEnabled: autoSaveFilesEnabledProp,
+  onAutoSaveFilesEnabledChange: onAutoSaveFilesEnabledChangeProp,
   permissionDialogTimeoutSeconds: permissionDialogTimeoutSecondsProp,
   onPermissionDialogTimeoutChange: onPermissionDialogTimeoutChangeProp,
 }: SettingsViewProps) => {
@@ -137,6 +142,8 @@ const SettingsView = ({
     setLocalSendShortcut,
     sendShortcut,
     autoOpenFileEnabled,
+    autoSaveFilesEnabled,
+    handleAutoSaveFilesEnabledChange,
     promptEnhancerConfig,
     setPromptEnhancerConfig,
     commitPrompt,
@@ -215,6 +222,8 @@ const SettingsView = ({
     onSendShortcutChangeProp,
     autoOpenFileEnabledProp,
     onAutoOpenFileEnabledChangeProp,
+    autoSaveFilesEnabledProp,
+    onAutoSaveFilesEnabledChangeProp,
     permissionDialogTimeoutSecondsProp,
     onPermissionDialogTimeoutChangeProp,
   });
@@ -493,6 +502,8 @@ const SettingsView = ({
               onSendShortcutChange={handleSendShortcutChange}
               autoOpenFileEnabled={autoOpenFileEnabled}
               onAutoOpenFileEnabledChange={handleAutoOpenFileEnabledChange}
+              autoSaveFilesEnabled={autoSaveFilesEnabled}
+              onAutoSaveFilesEnabledChange={handleAutoSaveFilesEnabledChange}
               chatBgColor={chatBgColor}
               onChatBgColorChange={setChatBgColor}
               userMsgColor={userMsgColor}

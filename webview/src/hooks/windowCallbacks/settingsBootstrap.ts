@@ -28,6 +28,7 @@ export const startInitialSettingsRequest = (): void => {
       window.sendToJava('get_streaming_enabled:');
       window.sendToJava('get_send_shortcut:');
       window.sendToJava('get_auto_open_file_enabled:');
+      window.sendToJava('get_auto_save_files_enabled:');
       window.sendToJava('get_permission_dialog_timeout:');
     } else {
       settingsRetryCount++;
@@ -143,6 +144,12 @@ export const drainPendingSettings = (): void => {
     const pending = w.__pendingAutoOpenFileEnabled as string;
     delete w.__pendingAutoOpenFileEnabled;
     window.updateAutoOpenFileEnabled?.(pending);
+  }
+
+  if (w.__pendingAutoSaveFilesEnabled) {
+    const pending = w.__pendingAutoSaveFilesEnabled as string;
+    delete w.__pendingAutoSaveFilesEnabled;
+    window.updateAutoSaveFilesEnabled?.(pending);
   }
 
   if (w.__pendingPermissionDialogTimeout) {
