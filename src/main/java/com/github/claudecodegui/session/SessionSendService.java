@@ -2,6 +2,7 @@ package com.github.claudecodegui.session;
 
 import com.github.claudecodegui.i18n.ClaudeCodeGuiBundle;
 import com.github.claudecodegui.settings.CodemossSettingsService;
+import com.github.claudecodegui.settings.CodexSettingsManager;
 import com.github.claudecodegui.notifications.ClaudeNotifier;
 import com.github.claudecodegui.provider.claude.ClaudeSDKBridge;
 import com.github.claudecodegui.provider.codex.CodexSDKBridge;
@@ -273,6 +274,7 @@ public class SessionSendService {
 
         String contextAppend = contextService.buildCodexContextAppend(openedFilesJson, fileTagPaths);
         String finalInput = (input != null ? input : "") + contextAppend;
+        String configuredModel = new CodexSettingsManager(gson).resolveModelAlias(state.getModel());
 
         return codexSDKBridge.sendMessage(
                 channelId,
@@ -281,7 +283,7 @@ public class SessionSendService {
                 state.getCwd(),
                 attachments,
                 effectivePermissionMode,
-                state.getModel(),
+                configuredModel,
                 agentPrompt,
                 requestedReasoningEffort != null ? requestedReasoningEffort : state.getReasoningEffort(),
                 effectiveCodexServiceTier,
