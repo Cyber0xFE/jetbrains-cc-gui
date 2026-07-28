@@ -32,7 +32,7 @@ import { ToastContainer } from './components/Toast';
 import { ChatHeader } from './components/ChatHeader';
 import { ChatScreen } from './components/ChatScreen';
 import type { MessageListRevealHandle } from './components/ConversationSearch/types';
-import { useSubagentContextValues } from './contexts/SubagentContext';
+import { useSubagentContextValues, useSetTaskEvents } from './contexts/SubagentContext';
 import { useMessages } from './contexts/MessagesContext';
 import { useSession } from './contexts/SessionContext';
 import { useUIState } from './contexts/UIStateContext';
@@ -71,6 +71,10 @@ const App = () => {
     setIsThinking,
     streamingActive, setStreamingActive,
   } = useMessages();
+
+  // task_events live in TaskEventProvider (SubagentContext) so their updates do
+  // not re-render every MessagesContext consumer.
+  const setTaskEvents = useSetTaskEvents();
 
   // ── Session state (extracted to SessionContext, stage 2 of TASK-P1-01) ──
   const {
@@ -265,6 +269,8 @@ const App = () => {
     setHistoryData, setMessages, setCurrentView, setCurrentSessionId,
     setCustomSessionTitle, setUsagePercentage, setUsageUsedTokens, setUsageMaxTokens,
     setStatus, setLoading, setIsThinking, setStreamingActive,
+    setTaskEvents,
+    setSubagentHistories,
     clearToasts, addToast, t,
   });
 
@@ -285,6 +291,7 @@ const App = () => {
     setIsRewinding, setRewindDialogOpen, setCurrentRewindRequest,
     setContextInfo, setSelectedAgent,
     setSubagentHistories,
+    setTaskEvents,
     currentProviderRef, messagesContainerRef, isUserAtBottomRef, userPausedRef,
     suppressNextStatusToastRef,
     streamingContentRef, streamingThinkingRef, isStreamingRef, useBackendStreamingRenderRef,
@@ -389,7 +396,7 @@ const App = () => {
     fileChangeMgmt,
     filteredFileChanges, subagents, globalTodos, rewindableMessages, sessionTitle,
   } = useChatComputations({
-    t, messages, mergedMessages, customSessionTitle, streamingActive, currentProvider,
+    t, messages, mergedMessages, subagentHistories, customSessionTitle, streamingActive, currentProvider,
     currentSessionId, currentSessionIdRef,
     getMessageText, getContentBlocks,
   });
