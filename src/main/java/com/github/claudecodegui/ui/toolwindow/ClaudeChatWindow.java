@@ -21,6 +21,8 @@ import com.github.claudecodegui.ui.ChatWindowDelegate;
 import com.github.claudecodegui.ui.EditorContextTracker;
 import com.github.claudecodegui.ui.WebviewInitializer;
 import com.github.claudecodegui.ui.WebviewWatchdog;
+import com.github.claudecodegui.ui.detached.DetachedChatFrame;
+import com.github.claudecodegui.ui.detached.DetachedWindowManager;
 import com.github.claudecodegui.util.HtmlLoader;
 import com.github.claudecodegui.util.JsUtils;
 import com.google.gson.Gson;
@@ -32,6 +34,7 @@ import com.intellij.openapi.diagnostic.Logger;
 import com.intellij.openapi.project.Project;
 import com.intellij.openapi.util.Disposer;
 import com.intellij.openapi.wm.ToolWindowManager;
+import com.intellij.openapi.wm.ToolWindow;
 import com.intellij.ui.content.Content;
 import com.intellij.ui.content.ContentManager;
 import com.intellij.ui.jcef.JBCefBrowser;
@@ -179,10 +182,11 @@ public class ClaudeChatWindow {
         this.webviewWatchdog = new WebviewWatchdog(
                 mainPanel,
                 () -> browser,
-                htmlLoader,
+                () -> webviewInitializer.reloadWebview("watchdog_reload"),
                 () -> webviewInitializer.recreateWebview("watchdog_recreate"),
                 () -> disposed,
-                () -> streamCoalescer.isStreamActive()
+                () -> streamCoalescer.isStreamActive(),
+                () -> frontendReady
         );
 
         this.session = new ClaudeSession(project, claudeSDKBridge, codexSDKBridge);
@@ -367,6 +371,48 @@ public class ClaudeChatWindow {
         return parentContent;
     }
 
+    private boolean isActiveContent() {
+        Content content = parentContent;
+        ContentManager contentManager = content == null ? null : content.getManager();
+        if (contentManager != null && contentManager.getIndexOfContent(content) >= 0) {
+            return contentManager.getSelectedContent() == content;
+        }
+        DetachedChatFrame detachedFrame = DetachedWindowManager.getDetachedFrame(project, this);
+        return detachedFrame == null || detachedFrame.isActive();
+    }
+
+    private void activateContent() {
+        Runnable activation = () -> {
+            if (disposed) {
+                return;
+            }
+            Content content = parentContent;
+            ContentManager contentManager = content == null ? null : content.getManager();
+            if (contentManager != null && contentManager.getIndexOfContent(content) >= 0) {
+                contentManager.setSelectedContent(content);
+                ToolWindow toolWindow = ToolWindowManager.getInstance(project)
+                        .getToolWindow(ClaudeSDKToolWindow.TOOL_WINDOW_ID);
+                if (toolWindow != null
+                        && toolWindow.getContentManager() == contentManager
+                        && !toolWindow.isActive()) {
+                    toolWindow.activate(null);
+                }
+                return;
+            }
+            DetachedChatFrame detachedFrame = DetachedWindowManager.getDetachedFrame(project, this);
+            if (detachedFrame != null) {
+                detachedFrame.setVisible(true);
+                detachedFrame.toFront();
+                detachedFrame.requestFocus();
+            }
+        };
+        if (SwingUtilities.isEventDispatchThread()) {
+            activation.run();
+        } else {
+            ApplicationManager.getApplication().invokeLater(activation);
+        }
+    }
+
     public JPanel getContent() {
         return mainPanel;
     }
@@ -380,7 +426,7 @@ public class ClaudeChatWindow {
             if (disposed || !isSelectedContent()) {
                 return;
             }
-            webviewWatchdog.resetTimestamps();
+            webviewWatchdog.markTabActivated();
 
             JBCefBrowser currentBrowser = browser;
             if (currentBrowser != null) {
@@ -1543,6 +1589,16 @@ public class ClaudeChatWindow {
             @Override
             public String getSessionId() {
                 return sessionId;
+            }
+
+            @Override
+            public boolean isActiveContent() {
+                return ClaudeChatWindow.this.isActiveContent();
+            }
+
+            @Override
+            public void activateContent() {
+                ClaudeChatWindow.this.activateContent();
             }
 
             @Override
