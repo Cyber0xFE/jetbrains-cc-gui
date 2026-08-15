@@ -4,11 +4,30 @@
  */
 
 import { existsSync, createReadStream, mkdirSync, readFileSync, appendFileSync, statSync } from 'fs';
-import { readFile } from 'fs/promises';
 import { dirname } from 'path';
 import { randomUUID } from 'crypto';
 import { createInterface } from 'readline';
 import { getClaudeProjectSessionFilePath } from '../../utils/path-utils.js';
+import { extractTaskNotificationXml } from './task-notification-parser.js';
+
+/**
+ * Write a JSON payload as a single stdout line and await the flush.
+ *
+ * `console.log` is fire-and-forget: for a piped stdout the underlying
+ * `process.stdout.write` is asynchronous, and a large payload (the full
+ * session history returned by getSession easily exceeds the libuv
+ * high-water mark) gets queued in an internal buffer. Once the handler
+ * returns, channel-manager.js sets `process.exitCode` and lets the process
+ * exit naturally -- which can race ahead of the buffer draining and
+ * truncate the JSON mid-stream, surfacing as `MalformedJsonException` on
+ * the Java side. Awaiting the write callback guarantees the bytes reach
+ * the OS pipe before the process is allowed to exit.
+ */
+function writeJsonResponse(payload) {
+  return new Promise((resolve) => {
+    process.stdout.write(JSON.stringify(payload) + '\n', 'utf8', resolve);
+  });
+}
 
 /**
  * Append a message to the JSONL history file.
@@ -83,46 +102,65 @@ export function loadSessionHistory(sessionId, cwd) {
 }
 
 /**
+ * Build the getSessionMessages response payload by reading a JSONL session
+ * file. Exported (not just inlined) so the parse + carrier-rewrite logic is
+ * unit-testable without going through process.stdout: the test only needs a
+ * temp file, not an stdout spy. Returns { success, messages } - empty messages
+ * when the file is missing.
+ */
+export function buildSessionMessagesPayload(sessionFile) {
+  if (!existsSync(sessionFile)) {
+    return { success: true, messages: [] };
+  }
+  const content = readFileSync(sessionFile, 'utf8');
+  const messages = content
+    .split('\n')
+    .filter(line => line.trim())
+    .map(line => {
+      try {
+        return JSON.parse(line);
+      } catch {
+        return null;
+      }
+    })
+    .filter(msg => msg !== null)
+    // A background Agent's terminal report can land as a queued_command
+    // attachment (type:"attachment") rather than a user message. Java's
+    // MessageParser only forwards user/assistant rows, so the attachment row
+    // would be dropped on history reload and the subagent card would stay
+    // stuck on the launch ack text. Re-shape it into a user message whose
+    // content is the task-notification XML - the same shape the user-message
+    // carrier already has - so MessageParser forwards it and the frontend's
+    // collectTaskEventsFromMessages recovers the report. User-message and
+    // non-task-notification attachments pass through unchanged.
+    .flatMap(msg => {
+      if (msg.type === 'attachment' && extractTaskNotificationXml(msg) !== null) {
+        return [{
+          type: 'user',
+          message: { role: 'user', content: extractTaskNotificationXml(msg) },
+        }];
+      }
+      return [msg];
+    });
+
+  return { success: true, messages };
+}
+
+/**
  * Get session history messages.
  * Reads from the ~/.claude/projects/ directory.
+ * Writes the result as a single NDJSON line to stdout.
  */
 export async function getSessionMessages(sessionId, cwd = null) {
   try {
     const sessionFile = resolveSessionFile(sessionId, cwd);
-
-    if (!existsSync(sessionFile)) {
-      console.log(JSON.stringify({
-        success: true,
-        messages: []
-      }));
-      return;
-    }
-
-    // Read the JSONL file
-    const content = await readFile(sessionFile, 'utf8');
-    const messages = content
-      .split('\n')
-      .filter(line => line.trim())
-      .map(line => {
-        try {
-          return JSON.parse(line);
-        } catch {
-          return null;
-        }
-      })
-      .filter(msg => msg !== null);
-
-    console.log(JSON.stringify({
-      success: true,
-      messages
-    }));
-
+    await writeJsonResponse(buildSessionMessagesPayload(sessionFile));
   } catch (error) {
     console.error('[GET_SESSION_ERROR]', error.message);
-    console.log(JSON.stringify({
+    await writeJsonResponse({
       success: false,
       error: error.message
-    }));
+    });
   }
 }
 
@@ -131,10 +169,10 @@ export async function getLatestUserMessage(sessionId, cwd = null) {
     const sessionFile = resolveSessionFile(sessionId, cwd);
 
     if (!existsSync(sessionFile)) {
-      console.log(JSON.stringify({
+      await writeJsonResponse({
         success: true,
         message: null
-      }));
+      });
       return;
     }
 
@@ -164,16 +202,16 @@ export async function getLatestUserMessage(sessionId, cwd = null) {
       }
     }
 
-    console.log(JSON.stringify({
+    await writeJsonResponse({
       success: true,
       message: latestUserMessage
-    }));
+    });
   } catch (error) {
     console.error('[GET_LATEST_USER_ERROR]', error.message);
-    console.log(JSON.stringify({
+    await writeJsonResponse({
       success: false,
       error: error.message
-    }));
+    });
   }
 }
 

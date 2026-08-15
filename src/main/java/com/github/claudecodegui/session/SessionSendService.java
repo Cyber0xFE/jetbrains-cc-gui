@@ -6,6 +6,8 @@ import com.github.claudecodegui.settings.CodexSettingsManager;
 import com.github.claudecodegui.notifications.ClaudeNotifier;
 import com.github.claudecodegui.provider.claude.ClaudeSDKBridge;
 import com.github.claudecodegui.provider.codex.CodexSDKBridge;
+import com.github.claudecodegui.provider.common.MarkerCliBridge;
+import com.github.claudecodegui.provider.common.MessageCallback;
 import com.google.gson.Gson;
 import com.google.gson.JsonObject;
 import com.intellij.openapi.application.ApplicationManager;
@@ -17,7 +19,9 @@ import com.intellij.openapi.vfs.LocalFileSystem;
 import com.intellij.openapi.vfs.VirtualFile;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -38,6 +42,7 @@ public class SessionSendService {
     private final Gson gson;
     private final ClaudeSDKBridge claudeSDKBridge;
     private final CodexSDKBridge codexSDKBridge;
+    private final Map<String, MarkerCliBridge> cliBridges;
     private final SessionContextService contextService;
 
     public SessionSendService(
@@ -49,6 +54,7 @@ public class SessionSendService {
             Gson gson,
             ClaudeSDKBridge claudeSDKBridge,
             CodexSDKBridge codexSDKBridge,
+            Map<String, MarkerCliBridge> cliBridges,
             SessionContextService contextService
     ) {
         this.project = project;
@@ -59,6 +65,7 @@ public class SessionSendService {
         this.gson = gson;
         this.claudeSDKBridge = claudeSDKBridge;
         this.codexSDKBridge = codexSDKBridge;
+        this.cliBridges = cliBridges != null ? cliBridges : Collections.emptyMap();
         this.contextService = contextService;
     }
 
@@ -145,6 +152,20 @@ public class SessionSendService {
             );
         }
 
+        if (cliBridges.containsKey(currentProvider)) {
+            return sendToCliProvider(
+                    currentProvider,
+                    channelId,
+                    input,
+                    attachments,
+                    openedFilesJson,
+                    agentPrompt,
+                    fileTagPaths,
+                    normalizedRequestedEffort,
+                    effectivePermissionMode
+            );
+        }
+
         return sendToClaude(channelId, input, attachments, openedFilesJson, agentPrompt,
                 effectivePermissionMode, normalizedRequestedEffort);
     }
@@ -188,7 +209,8 @@ public class SessionSendService {
             resolvedMode = "default";
         }
 
-        if ("codex".equals(provider) && "plan".equals(resolvedMode)) {
+        // Codex + headless CLI providers have no plan mode equivalent.
+        if (("codex".equals(provider) || SessionProviderRouter.isCliProvider(provider)) && "plan".equals(resolvedMode)) {
             return "default";
         }
         return resolvedMode;
@@ -289,6 +311,139 @@ public class SessionSendService {
                 effectiveCodexServiceTier,
                 handler
         ).thenApply(result -> null);
+    }
+
+    private CompletableFuture<Void> sendToCliProvider(
+            String provider,
+            String channelId,
+            String input,
+            List<ClaudeSession.Attachment> attachments,
+            JsonObject openedFilesJson,
+            String agentPrompt,
+            List<String> fileTagPaths,
+            String requestedReasoningEffort,
+            String permissionMode
+    ) {
+        MarkerCliBridge bridge = cliBridges.get(provider);
+        if (bridge == null) {
+            MessageCallback missingHandler = createCliMessageHandler(provider);
+            missingHandler.onError("CLI provider not registered: " + provider);
+            return CompletableFuture.completedFuture(null);
+        }
+
+        // Grok has a dedicated handler (multi-turn assistant ownership + no user-echo
+        // dupes). Other CLI providers reuse Codex streaming marker handling.
+        MessageCallback handler = createCliMessageHandler(provider);
+
+        String contextAppend = contextService.buildCodexContextAppend(openedFilesJson, fileTagPaths);
+        String finalInput = (input != null ? input : "") + contextAppend;
+        if (agentPrompt != null && !agentPrompt.isEmpty()) {
+            finalInput = finalInput + "\n\n## Agent Role and Instructions\n\n" + agentPrompt;
+            LOG.info("[Agent] ✓ Appending agentPrompt to user message for " + provider
+                    + " (length: " + agentPrompt.length() + " chars)");
+        }
+
+        String effort = normalizeCliReasoningEffort(
+                requestedReasoningEffort != null ? requestedReasoningEffort : state.getReasoningEffort()
+        );
+        String modelForCli = normalizeCliModelForProvider(provider, state.getModel());
+        String effectiveMode = permissionMode != null && !permissionMode.isBlank()
+                ? permissionMode
+                : "default";
+        int attachmentCount = attachments != null ? attachments.size() : 0;
+
+        LOG.info("[Lifecycle] sendToCli provider=" + provider
+                + " sessionId=" + (state.getSessionId() != null ? state.getSessionId() : "(new)")
+                + ", cwd=" + state.getCwd()
+                + ", modelRaw=" + state.getModel()
+                + ", modelCli=" + (modelForCli != null ? modelForCli : "(config-default)")
+                + ", effort=" + effort
+                + ", permissionMode=" + effectiveMode
+                + ", attachments=" + attachmentCount);
+
+        return bridge.sendMessage(
+                channelId,
+                finalInput,
+                state.getSessionId(),
+                state.getCwd(),
+                modelForCli != null ? modelForCli : "",
+                effort,
+                attachments,
+                effectiveMode,
+                handler
+        ).thenApply(result -> null);
+    }
+
+    /**
+     * Build the marker-stream callback for a CLI provider.
+     * Grok uses {@link GrokMessageHandler} so each stream owns a dedicated assistant
+     * bubble and ACP user echoes never re-append the send-time user message.
+     */
+    MessageCallback createCliMessageHandler(String provider) {
+        CallbackHandler callbacks = callbackFacade.getCallbackHandler();
+        if ("grok".equals(provider)) {
+            return new GrokMessageHandler(state, callbacks);
+        }
+        return new CodexMessageHandler(state, callbacks);
+    }
+
+    static String normalizeCliReasoningEffort(String effort) {
+        if (effort == null) {
+            return "medium";
+        }
+        String normalized = effort.trim().toLowerCase();
+        if ("low".equals(normalized) || "medium".equals(normalized) || "high".equals(normalized)) {
+            return normalized;
+        }
+        return "medium";
+    }
+
+    /**
+     * Map UI model selection to CLI model flag. Returns null to omit the flag
+     * (provider CLI uses its own default / config).
+     */
+    static String normalizeCliModelForProvider(String provider, String model) {
+        if (model == null) {
+            return null;
+        }
+        String trimmed = model.trim();
+        if (trimmed.isEmpty()) {
+            return null;
+        }
+        String lower = trimmed.toLowerCase();
+        if ("__config_default__".equals(lower)
+                || "auto".equals(lower)
+                || "default".equals(lower)
+                || "(default)".equals(lower)
+                || "config-default".equals(lower)
+                || "config_default".equals(lower)
+                || "opencode default".equals(lower)
+                || "opencode-default".equals(lower)) {
+            return null;
+        }
+        // Leftovers after a provider switch without model reset. OpenCode
+        // legitimately supports OpenAI models, so gpt-* is only filtered for
+        // the other CLI providers.
+        if (lower.startsWith("claude-") || (lower.startsWith("gpt-") && !"opencode".equals(provider))) {
+            LOG.warn("[" + provider + "] Ignoring non-provider model leftover for CLI: " + trimmed);
+            return null;
+        }
+        if ("grok".equals(provider)) {
+            if ("grok".equals(lower) || "default".equals(lower) || "(default)".equals(lower)
+                    || "grok-4.5".equals(lower)) {
+                LOG.info("[Grok] Normalizing sentinel model id '" + trimmed + "' to default model 'grok-4.6'");
+                return "grok-4.6";
+            }
+        }
+        return trimmed;
+    }
+
+    /**
+     * @deprecated use {@link #normalizeCliModelForProvider(String, String)}
+     */
+    @Deprecated
+    static String normalizeGrokModelForCli(String model) {
+        return normalizeCliModelForProvider("grok", model);
     }
 
     private CompletableFuture<Void> sendToClaude(
