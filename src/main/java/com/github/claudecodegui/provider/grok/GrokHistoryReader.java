@@ -27,7 +27,8 @@ import java.util.Map;
 
 /**
  * Reads Grok CLI session history from
- * {@code ~/.grok/sessions/<url-encoded-cwd>/<sessionId>/{summary.json,chat_history.jsonl}}.
+ * {@code $GROK_HOME/sessions/<url-encoded-cwd>/<sessionId>/{summary.json,chat_history.jsonl}}
+ * (default home {@code ~/.grok}; often {@code ~/.antig-grok} when {@code GROK_HOME} is set).
  */
 public class GrokHistoryReader {
 
@@ -36,24 +37,38 @@ public class GrokHistoryReader {
     private static final int MAX_TOOL_RESULT_CHARS = 20_000;
 
     private final Gson gson;
-    private final Path sessionsRoot;
+    /** Ordered session roots (primary GROK_HOME first, then fallbacks). */
+    private final List<Path> sessionsRoots;
 
     public GrokHistoryReader() {
-        this(defaultSessionsRoot(), new Gson());
+        this(defaultSessionsRoots(), new Gson());
     }
 
     GrokHistoryReader(Path sessionsRoot, Gson gson) {
-        this.sessionsRoot = sessionsRoot;
+        this(sessionsRoot != null ? List.of(sessionsRoot) : List.of(), gson);
+    }
+
+    GrokHistoryReader(List<Path> sessionsRoots, Gson gson) {
+        this.sessionsRoots = sessionsRoots != null ? List.copyOf(sessionsRoots) : List.of();
         this.gson = gson;
     }
 
-    private static Path defaultSessionsRoot() {
-        String home = NodeDetector.resolveHomeForFileOps();
-        String grokHome = System.getenv("GROK_HOME");
-        if (grokHome != null && !grokHome.trim().isEmpty()) {
-            return Paths.get(grokHome.trim(), "sessions");
+    private static List<Path> defaultSessionsRoots() {
+        List<Path> roots = new ArrayList<>();
+        for (Path home : GrokLocalAuthResolver.resolveGrokHomeCandidates()) {
+            if (home != null) {
+                roots.add(home.resolve("sessions"));
+            }
         }
-        return Paths.get(home, ".grok", "sessions");
+        // Last-resort default if PlatformUtils home resolution failed above.
+        if (roots.isEmpty()) {
+            String home = NodeDetector.resolveHomeForFileOps();
+            if (home != null && !home.isEmpty()) {
+                roots.add(Paths.get(home, ".grok", "sessions"));
+            }
+        }
+        LOG.info("[GrokHistoryReader] Session roots: " + roots);
+        return roots;
     }
 
     public static class SessionInfo {
@@ -113,34 +128,44 @@ public class GrokHistoryReader {
 
     public List<SessionInfo> listAllSessions() throws IOException {
         List<SessionInfo> sessions = new ArrayList<>();
-        if (!Files.isDirectory(sessionsRoot)) {
-            LOG.info("[GrokHistoryReader] Sessions root missing: " + sessionsRoot);
-            return sessions;
-        }
-
-        try (DirectoryStream<Path> cwdDirs = Files.newDirectoryStream(sessionsRoot)) {
-            for (Path cwdDir : cwdDirs) {
-                if (!Files.isDirectory(cwdDir)) {
-                    continue;
-                }
-                String name = cwdDir.getFileName().toString();
-                if (name.startsWith(".") || name.endsWith(".sqlite") || name.endsWith(".db")) {
-                    continue;
-                }
-                String cwd = decodeCwdDirName(name);
-                try (DirectoryStream<Path> sessionDirs = Files.newDirectoryStream(cwdDir)) {
-                    for (Path sessionDir : sessionDirs) {
-                        if (!Files.isDirectory(sessionDir)) {
-                            continue;
-                        }
-                        SessionInfo info = readSessionSummary(sessionDir, cwd);
-                        if (info != null) {
-                            sessions.add(info);
+        // Prefer the first root that owns a given sessionId when the same id
+        // appears in multiple homes (should be rare).
+        Map<String, SessionInfo> byId = new HashMap<>();
+        boolean anyRoot = false;
+        for (Path sessionsRoot : sessionsRoots) {
+            if (!Files.isDirectory(sessionsRoot)) {
+                LOG.info("[GrokHistoryReader] Sessions root missing: " + sessionsRoot);
+                continue;
+            }
+            anyRoot = true;
+            try (DirectoryStream<Path> cwdDirs = Files.newDirectoryStream(sessionsRoot)) {
+                for (Path cwdDir : cwdDirs) {
+                    if (!Files.isDirectory(cwdDir)) {
+                        continue;
+                    }
+                    String name = cwdDir.getFileName().toString();
+                    if (name.startsWith(".") || name.endsWith(".sqlite") || name.endsWith(".db")) {
+                        continue;
+                    }
+                    String cwd = decodeCwdDirName(name);
+                    try (DirectoryStream<Path> sessionDirs = Files.newDirectoryStream(cwdDir)) {
+                        for (Path sessionDir : sessionDirs) {
+                            if (!Files.isDirectory(sessionDir)) {
+                                continue;
+                            }
+                            SessionInfo info = readSessionSummary(sessionDir, cwd);
+                            if (info != null && info.sessionId != null) {
+                                byId.putIfAbsent(info.sessionId, info);
+                            }
                         }
                     }
                 }
             }
         }
+        if (!anyRoot) {
+            LOG.info("[GrokHistoryReader] No sessions roots available: " + sessionsRoots);
+        }
+        sessions.addAll(byId.values());
         sessions.sort(Comparator.comparingLong((SessionInfo s) -> s.lastTimestamp).reversed());
         return sessions;
     }
@@ -165,7 +190,8 @@ public class GrokHistoryReader {
         long summaryMtime = fileMtimeMillis(summaryPath);
         long created = 0L;
         long updatedFromSummary = 0L;
-        String title = null;
+        String generatedTitle = null;
+        String sessionSummary = null;
         int messageCount = 0;
 
         if (Files.isRegularFile(summaryPath)) {
@@ -173,9 +199,10 @@ public class GrokHistoryReader {
                 String raw = Files.readString(summaryPath, StandardCharsets.UTF_8);
                 JsonObject summary = JsonParser.parseString(raw).getAsJsonObject();
                 if (summary.has("generated_title") && !summary.get("generated_title").isJsonNull()) {
-                    title = summary.get("generated_title").getAsString();
-                } else if (summary.has("session_summary") && !summary.get("session_summary").isJsonNull()) {
-                    title = summary.get("session_summary").getAsString();
+                    generatedTitle = summary.get("generated_title").getAsString();
+                }
+                if (summary.has("session_summary") && !summary.get("session_summary").isJsonNull()) {
+                    sessionSummary = summary.get("session_summary").getAsString();
                 }
                 if (summary.has("num_chat_messages") && summary.get("num_chat_messages").isJsonPrimitive()) {
                     messageCount = summary.get("num_chat_messages").getAsInt();
@@ -204,30 +231,23 @@ public class GrokHistoryReader {
             }
         }
 
+        String firstUserPrompt = null;
         if (Files.isRegularFile(chatPath)) {
             try {
                 info.fileSize = Files.size(chatPath);
-                boolean needCount = messageCount <= 0;
-                boolean needTitle = title == null || title.trim().isEmpty();
-                if (needCount || needTitle) {
-                    ChatHistoryMeta meta = scanChatHistoryMeta(chatPath, needTitle);
-                    if (needCount) {
-                        messageCount = meta.nonEmptyLines;
-                    }
-                    if (needTitle && meta.firstUserPrompt != null && !meta.firstUserPrompt.isEmpty()) {
-                        title = truncate(meta.firstUserPrompt, MAX_TITLE_CHARS);
-                    }
+                // Always capture first user prompt when possible: Grok CLI's generated_title
+                // is frequently an English paraphrase of a non-English user message.
+                ChatHistoryMeta meta = scanChatHistoryMeta(chatPath, true);
+                if (messageCount <= 0) {
+                    messageCount = meta.nonEmptyLines;
                 }
+                firstUserPrompt = meta.firstUserPrompt;
             } catch (Exception e) {
                 LOG.debug("[GrokHistoryReader] Failed to read chat history meta for " + sessionDir + ": " + e.getMessage());
             }
         }
 
-        if (title == null || title.trim().isEmpty()) {
-            title = "Grok session " + sessionId.substring(0, Math.min(8, sessionId.length()));
-        }
-
-        info.title = title.trim();
+        info.title = resolveSessionTitle(firstUserPrompt, generatedTitle, sessionSummary, sessionId);
         info.messageCount = Math.max(messageCount, 0);
         info.firstTimestamp = created > 0 ? created : (summaryMtime > 0 ? summaryMtime : chatMtime);
         // Prefer chat file mtime so bulk summary rewrites don't collapse all rows to "just now".
@@ -295,35 +315,42 @@ public class GrokHistoryReader {
             return null;
         }
         if (cwd != null && !cwd.trim().isEmpty()) {
-            Path direct = sessionsRoot.resolve(encodeCwd(cwd)).resolve(id);
-            if (Files.isDirectory(direct)) {
-                return direct;
-            }
-            // macOS may canonicalize /var → /private/var etc.
-            Path canon = sessionsRoot.resolve(encodeCwd(canonicalizePath(cwd))).resolve(id);
-            if (Files.isDirectory(canon)) {
-                return canon;
+            String encoded = encodeCwd(cwd);
+            String encodedCanon = encodeCwd(canonicalizePath(cwd));
+            for (Path sessionsRoot : sessionsRoots) {
+                Path direct = sessionsRoot.resolve(encoded).resolve(id);
+                if (Files.isDirectory(direct)) {
+                    return direct;
+                }
+                // macOS may canonicalize /var → /private/var etc.
+                Path canon = sessionsRoot.resolve(encodedCanon).resolve(id);
+                if (Files.isDirectory(canon)) {
+                    return canon;
+                }
             }
         }
         return findSessionDirById(id);
     }
 
     private Path findSessionDirById(String sessionId) {
-        if (!Files.isDirectory(sessionsRoot)) {
-            return null;
-        }
-        try (DirectoryStream<Path> cwdDirs = Files.newDirectoryStream(sessionsRoot)) {
-            for (Path cwdDir : cwdDirs) {
-                if (!Files.isDirectory(cwdDir)) {
-                    continue;
-                }
-                Path candidate = cwdDir.resolve(sessionId);
-                if (Files.isDirectory(candidate)) {
-                    return candidate;
-                }
+        for (Path sessionsRoot : sessionsRoots) {
+            if (!Files.isDirectory(sessionsRoot)) {
+                continue;
             }
-        } catch (IOException e) {
-            LOG.warn("[GrokHistoryReader] Scan for session id failed: " + e.getMessage());
+            try (DirectoryStream<Path> cwdDirs = Files.newDirectoryStream(sessionsRoot)) {
+                for (Path cwdDir : cwdDirs) {
+                    if (!Files.isDirectory(cwdDir)) {
+                        continue;
+                    }
+                    Path candidate = cwdDir.resolve(sessionId);
+                    if (Files.isDirectory(candidate)) {
+                        return candidate;
+                    }
+                }
+            } catch (IOException e) {
+                LOG.warn("[GrokHistoryReader] Scan for session id failed under "
+                        + sessionsRoot + ": " + e.getMessage());
+            }
         }
         return null;
     }
@@ -618,6 +645,35 @@ public class GrokHistoryReader {
             return content.getAsString();
         }
         return content.toString();
+    }
+
+    /**
+     * History list / reopen title priority:
+     * <ol>
+     *   <li>First real user prompt (preserves the user's language; matches Codex)</li>
+     *   <li>Grok CLI {@code generated_title}</li>
+     *   <li>{@code session_summary}</li>
+     *   <li>Short session-id fallback</li>
+     * </ol>
+     * Preferring the user prompt avoids English auto-titles for Chinese (etc.) prompts.
+     */
+    static String resolveSessionTitle(
+            String firstUserPrompt,
+            String generatedTitle,
+            String sessionSummary,
+            String sessionId
+    ) {
+        if (firstUserPrompt != null && !firstUserPrompt.trim().isEmpty()) {
+            return truncate(firstUserPrompt.trim(), MAX_TITLE_CHARS);
+        }
+        if (generatedTitle != null && !generatedTitle.trim().isEmpty()) {
+            return generatedTitle.trim();
+        }
+        if (sessionSummary != null && !sessionSummary.trim().isEmpty()) {
+            return truncate(sessionSummary.trim(), MAX_TITLE_CHARS);
+        }
+        String id = sessionId != null ? sessionId : "";
+        return "Grok session " + id.substring(0, Math.min(8, id.length()));
     }
 
     private static String stripUserQueryWrapper(String raw) {

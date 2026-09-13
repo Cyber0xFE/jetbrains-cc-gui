@@ -3,6 +3,7 @@ import {
   CLAUDE_MODELS,
   CODEX_MODELS,
   GROK_MODELS,
+  OMP_MODELS,
 } from './types';
 import { buildCodexModelList } from './codexModelList';
 import {
@@ -55,8 +56,24 @@ export function resolveProviderModels({
     return cliModels.length > 0 ? cliModels : GROK_MODELS;
   }
 
-  if (provider === 'kimi' || provider === 'opencode' || provider === 'pi') {
+  if (provider === 'kimi' || provider === 'opencode' || provider === 'pi' || provider === 'dsh') {
+    // Runtime catalog from the CLI/host (static fallback list when offline).
     return cliModels;
+  }
+
+  if (provider === 'omp') {
+    // 'auto' first, then the dynamic catalog. Model roles (smol/slow/plan/…)
+    // are NOT listed here — they live in the mode selector (ModeSelect),
+    // which sets the model to the role id as a shortcut.
+    // Dedupe by id — the static-fallback cliModels IS OMP_MODELS, so 'auto'
+    // would otherwise appear twice.
+    const merged = [...OMP_MODELS, ...cliModels];
+    const seenIds = new Set<string>();
+    return merged.filter((m) => {
+      if (seenIds.has(m.id)) return false;
+      seenIds.add(m.id);
+      return true;
+    });
   }
 
   // Claude (default)

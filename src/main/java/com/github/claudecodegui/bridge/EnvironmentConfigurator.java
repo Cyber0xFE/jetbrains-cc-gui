@@ -99,6 +99,8 @@ public class EnvironmentConfigurator {
             String[] windowsPaths = {
                     System.getenv("ProgramFiles") + "\\nodejs",
                     System.getenv("APPDATA") + "\\npm",
+                    // OMP Windows native installer: %LOCALAPPDATA%\omp\omp.exe
+                    System.getenv("LOCALAPPDATA") + "\\omp",
                     System.getenv("LOCALAPPDATA") + "\\Programs\\nodejs"
             };
             for (String p : windowsPaths) {
@@ -127,7 +129,18 @@ public class EnvironmentConfigurator {
                     userHome + "/.opencode/bin",
                     userHome + "/.grok/bin",
                     userHome + "/.pi/bin",
+                    userHome + "/.omp/bin",
+                    // Bun global installs (bun add -g) land here, e.g. omp CLI
+                    userHome + "/.bun/bin",
+                    // Yarn classic global installs
+                    userHome + "/.yarn/bin",
+                    // pnpm global installs (PNPM_HOME defaults per platform)
+                    userHome + "/Library/pnpm",
+                    userHome + "/.local/share/pnpm",
                     userHome + "/.claude/bin",
+                    // DeepSeek Harness (Hermes installer keeps node + dsh together)
+                    userHome + "/.hermes/node/bin",
+                    userHome + "/.dsh/bin",
             };
             for (String p : unixPaths) {
                 if (!pathContains(currentPath, p)) {

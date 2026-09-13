@@ -86,8 +86,7 @@
     "retrySdkStatus": "Tentar novamente",
     "openSourceBanner": "Este projeto é garantidamente 100% open source e gratuito (cuidado com projetos piratas)",
     "openSourceBannerStar": "Star",
-    "openSourceBannerStarToast": "Link copiado para a área de transferência — cole no navegador para acessar ⭐",
-    "openSourceBannerStarAria": "Copiar link e dar uma estrela no GitHub",
+    "openSourceBannerStarAria": "Abrir o repositório no GitHub e dar uma estrela",
     "goInstallSdk": "Ir para Instalação",
     "commandNotImplemented": "O recurso `{{command}}` ainda não foi implementado.",
     "clearCommandDescription": "Limpar histórico de conversa e iniciar uma nova sessão",
@@ -237,7 +236,8 @@
           "grok": "Grok CLI",
           "kimi": "Kimi CLI",
           "opencode": "OpenCode",
-          "pi": "PI CLI"
+          "pi": "PI CLI",
+          "omp": "OMP CLI"
         },
         "currentProviderAuto": "Currently using automatic selection: {{provider}}",
         "currentProviderManual": "Currently using manually selected provider: {{provider}}",
@@ -556,11 +556,18 @@
     "versionHistoryDesc": "Visualizar todos os registros de atualização de versão",
     "communityQrTip": "Escaneie com o WeChat para entrar na comunidade",
     "communityQrAlt": "QR code da comunidade oficial do WeChat",
-    "githubTitle": "Repositório GitHub",
-    "githubDesc": "Este projeto é open source no GitHub. Dê uma estrela para mostrar seu apoio!",
-    "githubCopyBtn": "Copiar URL do Repositório",
-    "githubCopied": "URL do repositório copiada. Por favor, acesse em seu navegador.",
-    "githubCopyFailed": "Falha ao copiar. Por favor, copie manualmente.",
+    "socialDocs": "Documentação oficial",
+    "socialTitle": "Siga-nos",
+    "socialGithub": "Repositório GitHub — dê uma estrela!",
+    "socialX": "X (Twitter) @ZPeng31310",
+    "socialZhihu": "Zhihu @vscodeai",
+    "socialXiaohongshu": "Xiaohongshu (RED)",
+    "socialDouyin": "Douyin — passe o mouse para escanear e seguir",
+    "socialYoutube": "Canal do YouTube",
+    "douyinQrAlt": "QR code do Douyin",
+    "douyinId": "ID do Douyin: nengyongai",
+    "douyinCopied": "ID do Douyin copiado para a área de transferência",
+    "douyinCopyFailed": "Falha ao copiar. Por favor, copie manualmente.",
     "sponsor": "Patrocinar",
     "sponsorDesc": "Se este projeto te ajudou, considere patrocinar para apoiar a manutenção contínua!",
     "alipay": "Alipay",
@@ -1004,6 +1011,10 @@
         "pi": {
           "name": "PI CLI",
           "description": "Agente de codificação de terminal minimalista com suporte a múltiplos provedores"
+        },
+        "omp": {
+          "name": "OMP CLI",
+          "description": "Agente de codificação de terminal Oh My Pi com suporte a múltiplos provedores"
         }
       },
       "installDialog": {
@@ -1021,7 +1032,11 @@
       "listTitle": "Ferramentas CLI locais",
       "summary": "{{installed}} / {{total}} instaladas",
       "moreComingSoon": "Em breve, mais suporte",
-      "copyPath": "Copiar caminho"
+      "copyPath": "Copiar caminho",
+      "visibility": {
+        "hide": "Ocultar no seletor de provedor",
+        "show": "Mostrar no seletor de provedor"
+      }
     }
   },
   "history": {
@@ -1050,7 +1065,7 @@
     "loading": "Carregando histórico...",
     "loadFailed": "Falha ao carregar",
     "noSessions": "Sem sessões no histórico",
-    "noSessionsDesc": "Nenhum registro de sessão do Claude encontrado no projeto atual",
+    "noSessionsDesc": "Nenhum registro de sessão encontrado no projeto atual",
     "totalSessions": "{{count}} sessões · {{total}} mensagens",
     "messageCount": "{{count}} mensagens",
     "searchPlaceholder": "Pesquisar títulos de sessão...",
@@ -1174,6 +1189,7 @@
   },
   "config": {
     "clickToCopy": "Clique para copiar",
+    "officialDocs": "Documentação oficial",
     "switch": "Alternar",
     "switchProvider": "Alternar provedor",
     "runtimeProvider": {
@@ -1533,7 +1549,9 @@
     "keepAllConfirmMessage": "Aceitar as alterações atuais como base. Alterações futuras serão rastreadas a partir do zero.",
     "discardAllSuccess": "Todas as alterações descartadas",
     "discardAllFailed": "Falha ao descartar: {{error}}",
-    "keepAllSuccess": "Todas as alterações mantidas, rastreamento redefinido"
+    "keepAllSuccess": "Todas as alterações mantidas, rastreamento redefinido",
+    "multiAgentBadge": "Multi-agente",
+    "multiAgentEdited": "{{count}} agentes editaram este arquivo nesta sessão — revise com cuidado"
   },
   "skills": {
     "title": "Skills",
@@ -1689,11 +1707,7 @@
       },
       "sonnet5": {
         "label": "Sonnet 5",
-        "description": "Sonnet 5 · Modelo aprimorado do Sonnet 4.6"
-      },
-      "sonnet47": {
-        "label": "Sonnet 4.7",
-        "description": "Sonnet 4.7 · Usar o modelo padrão"
+        "description": "Sonnet 5 · Usar o modelo padrão"
       },
       "opus5": {
         "label": "Opus 5",
@@ -1770,7 +1784,7 @@
   "codexModes": {
     "default": {
       "label": "Sugerir (aprovação)",
-      "tooltip": "Codex approval_policy=untrusted – solicita antes de editar arquivos ou executar comandos shell.",
+      "tooltip": "Codex approval_policy=on-request – solicita antes de editar arquivos ou executar comandos shell.",
       "description": "Opção mais segura. Cada escrita ou comando requer sua aprovação."
     },
     "plan": {
@@ -1789,6 +1803,28 @@
       "description": "Modo autônomo. O Codex executa edições e comandos shell imediatamente."
     }
   },
+  "ompModes": {
+    "default": {
+      "label": "Padrão",
+      "tooltip": "Usa o modelo selecionado (ou OMP auto)",
+      "description": "Usa o modelo escolhido no menu suspenso de modelos, ou o padrão do OMP CLI quando definido como Auto."
+    },
+    "smol": {
+      "label": "Smol",
+      "tooltip": "Função de modelo rápido (omp --model smol)",
+      "description": "Executa esta conversa com o modelo configurado para a função smol do omp. Substitui o menu suspenso de modelos."
+    },
+    "slow": {
+      "label": "Slow",
+      "tooltip": "Função de modelo de raciocínio (omp --model slow)",
+      "description": "Executa esta conversa com o modelo configurado para a função slow do omp. Substitui o menu suspenso de modelos."
+    },
+    "plan": {
+      "label": "Plan",
+      "tooltip": "Função de modelo de planejamento (omp --model plan)",
+      "description": "Executa esta conversa com o modelo configurado para a função plan do omp. Substitui o menu suspenso de modelos."
+    }
+  },
   "providers": {
     "claude": {
       "label": "Claude Code"
@@ -1804,6 +1840,9 @@
     },
     "pi": {
       "label": "PI CLI"
+    },
+    "omp": {
+      "label": "OMP CLI"
     }
   },
   "promptEnhancer": {

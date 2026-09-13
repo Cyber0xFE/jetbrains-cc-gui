@@ -96,6 +96,7 @@ export interface ChatScreenProps {
   claudeSettingsAlwaysThinkingEnabled: ProviderState['claudeSettingsAlwaysThinkingEnabled'];
   reasoningEffort: ProviderState['reasoningEffort'];
   codexFastMode: ProviderState['codexFastMode'];
+  dshPreset: ProviderState['dshPreset'];
   streamingEnabledSetting: ProviderState['streamingEnabledSetting'];
   sendShortcut: ProviderState['sendShortcut'];
   autoOpenFileEnabled: ProviderState['autoOpenFileEnabled'];
@@ -110,6 +111,7 @@ export interface ChatScreenProps {
   onAgentSelect: ProviderState['handleAgentSelect'];
   onReasoningChange: ProviderState['handleReasoningChange'];
   onCodexFastModeChange: ProviderState['handleCodexFastModeChange'];
+  onDshPresetChange: ProviderState['handleDshPresetChange'];
   onToggleThinking: ProviderState['handleToggleThinking'];
   onStreamingEnabledChange: ProviderState['handleStreamingEnabledChange'];
   onAutoOpenFileEnabledChange: ProviderState['handleAutoOpenFileEnabledChange'];
@@ -146,9 +148,9 @@ export const ChatScreen = ({
   currentProvider, selectedModel, permissionMode, selectedAgent,
   sdkStatusLoading, sdkStatusError, onRetrySdkStatus, currentSdkInstalled,
   activeProviderConfig, claudeSettingsAlwaysThinkingEnabled,
-  reasoningEffort, codexFastMode, streamingEnabledSetting, sendShortcut, autoOpenFileEnabled,
+  reasoningEffort, codexFastMode, dshPreset, streamingEnabledSetting, sendShortcut, autoOpenFileEnabled,
   longContextEnabled, usagePercentage, usageUsedTokens, usageMaxTokens,
-  onModeSelect, onModelSelect, onAgentSelect, onReasoningChange, onCodexFastModeChange, onToggleThinking,
+  onModeSelect, onModelSelect, onAgentSelect, onReasoningChange, onCodexFastModeChange, onDshPresetChange, onToggleThinking,
   onStreamingEnabledChange,
   onAutoOpenFileEnabledChange, onLongContextChange,
   messageQueue, onRemoveFromQueue,
@@ -170,7 +172,7 @@ export const ChatScreen = ({
     previousMessageKeySnapshotRef.current = messageKeySnapshot;
   }, [messageKeySnapshot]);
   const {
-    setSettingsInitialTab, setCurrentView,
+    setSettingsInitialTab, setCurrentView, setSettingsProviderSubTab,
     contextInfo, setContextInfo,
     setAddModelDialogOpen,
     addToast,
@@ -241,6 +243,11 @@ export const ChatScreen = ({
     setSearchOpen(false);
   }, [setSearchOpen]);
 
+  const handleNavigateToDependencySettings = useCallback(() => {
+    setSettingsInitialTab('dependencies');
+    setCurrentView('settings');
+  }, [setCurrentView, setSettingsInitialTab]);
+
   return (
     <>
       <div className="messages-shell">
@@ -289,10 +296,7 @@ export const ChatScreen = ({
                   onMessageNodeRef={onMessageNodeRef}
                   onCollapsedCountChange={setAnchorCollapsedCount}
                   onNavigateToProviderSettings={onNavigateToProviderSettings}
-                  onNavigateToDependencySettings={() => {
-                    setSettingsInitialTab('dependencies');
-                    setCurrentView('settings');
-                  }}
+                  onNavigateToDependencySettings={handleNavigateToDependencySettings}
                   currentProvider={currentProvider}
                   onRollbackUserMessage={onRollbackUserMessage}
                   isRollingBack={isRollingBack}
@@ -303,7 +307,8 @@ export const ChatScreen = ({
           </SessionIdContext.Provider>
         </div>
         <CodexPetStatusBridge
-          active={currentProvider === 'codex' && petEnabled}
+          key={currentProvider}
+          active={petEnabled && (currentProvider === 'codex' || currentProvider === 'claude')}
           loading={loading}
           streamingActive={streamingActive}
           isThinking={isThinking}
@@ -362,9 +367,11 @@ export const ChatScreen = ({
           onModelSelect={onModelSelect}
           onProviderSelect={onProviderSelect}
           reasoningEffort={reasoningEffort}
+          dshPreset={dshPreset}
           onReasoningChange={onReasoningChange}
           codexFastMode={codexFastMode}
           onCodexFastModeChange={onCodexFastModeChange}
+          onDshPresetChange={onDshPresetChange}
           onToggleThinking={onToggleThinking}
           streamingEnabled={streamingEnabledSetting}
           onStreamingEnabledChange={onStreamingEnabledChange}
@@ -380,6 +387,11 @@ export const ChatScreen = ({
           onClearContext={() => setContextInfo(null)}
           onOpenAgentSettings={() => {
             setSettingsInitialTab('agents');
+            setCurrentView('settings');
+          }}
+          onOpenCliSettings={() => {
+            setSettingsInitialTab('providers');
+            setSettingsProviderSubTab('cli');
             setCurrentView('settings');
           }}
           onOpenPromptSettings={() => {

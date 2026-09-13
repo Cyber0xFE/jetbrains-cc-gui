@@ -7,6 +7,7 @@ import com.github.claudecodegui.i18n.ClaudeCodeGuiBundle;
 import com.github.claudecodegui.model.ConflictStrategy;
 import com.github.claudecodegui.model.DeleteResult;
 import com.github.claudecodegui.model.PromptScope;
+import com.github.claudecodegui.session.SessionState;
 import com.github.claudecodegui.dependency.DependencyManager;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
@@ -19,8 +20,9 @@ import com.intellij.openapi.project.Project;
 
 import java.io.File;
 import java.io.FileReader;
-import java.io.FileWriter;
 import java.io.IOException;
+import java.io.Writer;
+import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -152,6 +154,32 @@ public class CodemossSettingsService {
         LOG.info("[CodemossSettingsService] Set grok.oauthBaseUrl=" + redactUrl(url));
     }
 
+    public JsonObject getGrokEnv() throws IOException {
+        JsonObject config = readConfig();
+        if (!config.has("grok") || config.get("grok").isJsonNull()) {
+            return new JsonObject();
+        }
+        JsonObject grok = config.getAsJsonObject("grok");
+        if (grok.has("env") && grok.get("env").isJsonObject()) {
+            return grok.getAsJsonObject("env");
+        }
+        return new JsonObject();
+    }
+
+    public void setGrokEnv(JsonObject env) throws IOException {
+        JsonObject config = readConfig();
+        JsonObject grok = config.has("grok") && !config.get("grok").isJsonNull()
+                ? config.getAsJsonObject("grok")
+                : new JsonObject();
+        if (env == null || env.size() == 0) {
+            grok.remove("env");
+        } else {
+            grok.add("env", env);
+        }
+        config.add("grok", grok);
+        writeConfig(config);
+    }
+
     public String getGrokGatewayOrigin() throws IOException {
         return getGrokStringSetting("gatewayOrigin");
     }
@@ -212,6 +240,121 @@ public class CodemossSettingsService {
         }
         return url.trim();
     }
+
+    // ============================================================================
+    // DSH (DeepSeek Harness) connection settings — thin connection only:
+    // bin / host / port / autoStart. Provider keys and model catalog stay in
+    // the DSH Web UI ($DSH_HOME); the plugin never writes them.
+    // ============================================================================
+
+    private static final String DSH_SECTION_KEY = "dsh";
+    private static final String DSH_DEFAULT_HOST = "127.0.0.1";
+    private static final int DSH_DEFAULT_PORT = 3080;
+
+    public String getDshBin() throws IOException {
+        return getDshStringSetting("bin");
+    }
+
+    public void setDshBin(String value) throws IOException {
+        setDshStringSetting("bin", value);
+    }
+
+    public String getDshHost() throws IOException {
+        String value = getDshStringSetting("host");
+        return value.isEmpty() ? DSH_DEFAULT_HOST : value;
+    }
+
+    public void setDshHost(String value) throws IOException {
+        setDshStringSetting("host", value);
+    }
+
+    public int getDshPort() throws IOException {
+        JsonObject config = readConfig();
+        if (!config.has(DSH_SECTION_KEY) || config.get(DSH_SECTION_KEY).isJsonNull()) {
+            return DSH_DEFAULT_PORT;
+        }
+        JsonObject dsh = config.getAsJsonObject(DSH_SECTION_KEY);
+        if (!dsh.has("port") || dsh.get("port").isJsonNull()) {
+            return DSH_DEFAULT_PORT;
+        }
+        try {
+            int port = dsh.get("port").getAsInt();
+            return port > 0 && port <= 65535 ? port : DSH_DEFAULT_PORT;
+        } catch (Exception e) {
+            return DSH_DEFAULT_PORT;
+        }
+    }
+
+    public void setDshPort(int port) throws IOException {
+        JsonObject config = readConfig();
+        JsonObject dsh = config.has(DSH_SECTION_KEY) && !config.get(DSH_SECTION_KEY).isJsonNull()
+                ? config.getAsJsonObject(DSH_SECTION_KEY)
+                : new JsonObject();
+        if (port > 0 && port <= 65535 && port != DSH_DEFAULT_PORT) {
+            dsh.addProperty("port", port);
+        } else {
+            dsh.remove("port");
+        }
+        config.add(DSH_SECTION_KEY, dsh);
+        writeConfig(config);
+    }
+
+    public boolean getDshAutoStart() throws IOException {
+        JsonObject config = readConfig();
+        if (!config.has(DSH_SECTION_KEY) || config.get(DSH_SECTION_KEY).isJsonNull()) {
+            return true;
+        }
+        JsonObject dsh = config.getAsJsonObject(DSH_SECTION_KEY);
+        if (!dsh.has("autoStart") || dsh.get("autoStart").isJsonNull()) {
+            return true;
+        }
+        try {
+            return dsh.get("autoStart").getAsBoolean();
+        } catch (Exception e) {
+            return true;
+        }
+    }
+
+    public void setDshAutoStart(boolean autoStart) throws IOException {
+        JsonObject config = readConfig();
+        JsonObject dsh = config.has(DSH_SECTION_KEY) && !config.get(DSH_SECTION_KEY).isJsonNull()
+                ? config.getAsJsonObject(DSH_SECTION_KEY)
+                : new JsonObject();
+        if (autoStart) {
+            dsh.remove("autoStart");
+        } else {
+            dsh.addProperty("autoStart", false);
+        }
+        config.add(DSH_SECTION_KEY, dsh);
+        writeConfig(config);
+    }
+
+    private String getDshStringSetting(String field) throws IOException {
+        JsonObject config = readConfig();
+        if (!config.has(DSH_SECTION_KEY) || config.get(DSH_SECTION_KEY).isJsonNull()) {
+            return "";
+        }
+        JsonObject dsh = config.getAsJsonObject(DSH_SECTION_KEY);
+        if (!dsh.has(field) || dsh.get(field).isJsonNull()) {
+            return "";
+        }
+        return dsh.get(field).getAsString();
+    }
+
+    private void setDshStringSetting(String field, String value) throws IOException {
+        JsonObject config = readConfig();
+        JsonObject dsh = config.has(DSH_SECTION_KEY) && !config.get(DSH_SECTION_KEY).isJsonNull()
+                ? config.getAsJsonObject(DSH_SECTION_KEY)
+                : new JsonObject();
+        String v = value != null ? value.trim() : "";
+        if (v.isEmpty()) {
+            dsh.remove(field);
+        } else {
+            dsh.addProperty(field, v);
+        }
+        config.add(DSH_SECTION_KEY, dsh);
+        writeConfig(config);
+    }
     private static final String COMMIT_AI_KEY = "commitAi";
     private static final String PROMPT_ENHANCER_KEY = "promptEnhancer";
     private static final String AI_FEATURE_PROVIDER_KEY = "provider";
@@ -225,6 +368,7 @@ public class CodemossSettingsService {
     private static final String AI_FEATURE_PROVIDER_KIMI = "kimi";
     private static final String AI_FEATURE_PROVIDER_OPENCODE = "opencode";
     private static final String AI_FEATURE_PROVIDER_PI = "pi";
+    private static final String AI_FEATURE_PROVIDER_OMP = "omp";
     /** Same order as webview AVAILABLE_PROVIDERS / chat CLI selector. */
     private static final String[] AI_FEATURE_PROVIDERS = {
             AI_FEATURE_PROVIDER_CLAUDE,
@@ -232,19 +376,22 @@ public class CodemossSettingsService {
             AI_FEATURE_PROVIDER_GROK,
             AI_FEATURE_PROVIDER_KIMI,
             AI_FEATURE_PROVIDER_OPENCODE,
-            AI_FEATURE_PROVIDER_PI
+            AI_FEATURE_PROVIDER_PI,
+            AI_FEATURE_PROVIDER_OMP
     };
     private static final String AI_FEATURE_RESOLUTION_MANUAL = "manual";
     private static final String AI_FEATURE_RESOLUTION_AUTO = "auto";
     private static final String AI_FEATURE_RESOLUTION_UNAVAILABLE = "unavailable";
-    private static final String DEFAULT_PROMPT_ENHANCER_CLAUDE_MODEL = "claude-sonnet-4-6";
+    // claude-sonnet-4-6/4-7 are retired - defaults must stay on live models (#1678, #1693).
+    private static final String DEFAULT_PROMPT_ENHANCER_CLAUDE_MODEL = "claude-sonnet-5";
     private static final String DEFAULT_PROMPT_ENHANCER_CODEX_MODEL = "gpt-5.5";
-    private static final String DEFAULT_COMMIT_AI_CLAUDE_MODEL = "claude-sonnet-4-6";
+    private static final String DEFAULT_COMMIT_AI_CLAUDE_MODEL = "claude-sonnet-5";
     private static final String DEFAULT_COMMIT_AI_CODEX_MODEL = "gpt-5.5";
     private static final String DEFAULT_AI_FEATURE_GROK_MODEL = "grok";
     private static final String DEFAULT_AI_FEATURE_KIMI_MODEL = "auto";
     private static final String DEFAULT_AI_FEATURE_OPENCODE_MODEL = "opencode-default";
     private static final String DEFAULT_AI_FEATURE_PI_MODEL = "auto";
+    private static final String DEFAULT_AI_FEATURE_OMP_MODEL = "auto";
     private static final String USER_LANGUAGE_CONFIG_KEY = "language";
 
     private final Gson gson;
@@ -354,12 +501,8 @@ public class CodemossSettingsService {
         // Initialize CodexSettingsManager
         this.codexSettingsManager = new CodexSettingsManager(gson);
 
-        // Initialize CodexMcpServerManager
-        this.codexMcpServerManager = new CodexMcpServerManager(codexSettingsManager);
-
         // Initialize CodexProviderManager
         this.codexProviderManager = new CodexProviderManager(
-                gson,
                 (ignored) -> {
                     try {
                         return readConfig();
@@ -376,6 +519,12 @@ public class CodemossSettingsService {
                 },
                 pathManager,
                 codexSettingsManager
+        );
+
+        // Initialize CodexMcpServerManager after the provider manager used by its access guard.
+        this.codexMcpServerManager = new CodexMcpServerManager(
+                codexSettingsManager,
+                this::isCodexConfigManagementAllowed
         );
     }
 
@@ -419,16 +568,28 @@ public class CodemossSettingsService {
         // Back up existing config
         backupConfig();
 
-        String configPath = getConfigPath();
-        try (FileWriter writer = new FileWriter(configPath, StandardCharsets.UTF_8)) {
-            gson.toJson(config, writer);
+        Path configPath = pathManager.getConfigFilePath();
+        Path parent = configPath.getParent();
+        Path tempPath = Files.createTempFile(parent, "config.json-", ".tmp");
+        try {
+            hardenFilePermissions(tempPath);
+            try (Writer writer = Files.newBufferedWriter(tempPath, StandardCharsets.UTF_8)) {
+                gson.toJson(config, writer);
+            }
+            try {
+                Files.move(tempPath, configPath, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+            } catch (AtomicMoveNotSupportedException ignored) {
+                Files.move(tempPath, configPath, StandardCopyOption.REPLACE_EXISTING);
+            }
             LOG.info("[CodemossSettings] Successfully wrote config to: " + configPath);
         } catch (Exception e) {
             LOG.warn("[CodemossSettings] Failed to write config: " + e.getMessage());
             throw e;
+        } finally {
+            Files.deleteIfExists(tempPath);
         }
         // Security (J): config.json holds provider API keys/tokens; restrict to 0600.
-        hardenFilePermissions(Paths.get(configPath));
+        hardenFilePermissions(configPath);
     }
 
     private void backupConfig() {
@@ -583,6 +744,15 @@ public class CodemossSettingsService {
 
     public void applyActiveProviderToClaudeSettings() throws IOException {
         providerManager.applyActiveProviderToClaudeSettings();
+    }
+
+    /**
+     * Startup-time repair pass: only fills in provider-managed fields that are
+     * missing from {@code ~/.claude/settings.json}, never overwrites existing
+     * values. See {@link ProviderManager#repairActiveProviderToClaudeSettings()}.
+     */
+    public boolean repairActiveProviderToClaudeSettings() throws IOException {
+        return providerManager.repairActiveProviderToClaudeSettings();
     }
 
     // ==================== Working Directory Management ====================
@@ -2187,6 +2357,12 @@ public class CodemossSettingsService {
                     raw = null;
                 }
             }
+            // Self-heal persisted retired Claude model ids (e.g. a config saved while
+            // the default was claude-sonnet-4-6 keeps that dead id forever; every
+            // generation then fails with an empty/failed response - #1693, see #1678).
+            if (AI_FEATURE_PROVIDER_CLAUDE.equals(provider)) {
+                raw = SessionState.normalizeRetiredModelId(raw);
+            }
             models.addProperty(provider, normalizeAiFeatureModel(raw, fallback));
         }
         return models;
@@ -2218,6 +2394,9 @@ public class CodemossSettingsService {
         }
         if (AI_FEATURE_PROVIDER_PI.equals(provider)) {
             return DEFAULT_AI_FEATURE_PI_MODEL;
+        }
+        if (AI_FEATURE_PROVIDER_OMP.equals(provider)) {
+            return DEFAULT_AI_FEATURE_OMP_MODEL;
         }
         return defaultClaudeModel;
     }
@@ -2323,12 +2502,12 @@ public class CodemossSettingsService {
         codexProviderManager.switchCodexProvider(id);
     }
 
-    public void applyActiveProviderToCodexSettings() throws IOException {
-        codexProviderManager.applyActiveProviderToCodexSettings();
+    public void switchToCodexCliLogin() throws IOException {
+        codexProviderManager.switchToCodexCliLogin();
     }
 
     public JsonObject getCurrentCodexConfig() throws IOException {
-        if (!isCodexLocalConfigAuthorized()) {
+        if (!isCodexLocalConfigAuthorized() && !codexProviderManager.isManagedProviderReady()) {
             return new JsonObject();
         }
         return codexProviderManager.getCurrentCodexConfig();
@@ -2344,14 +2523,6 @@ public class CodemossSettingsService {
             LOG.warn("[CodemossSettings] Failed to check Codex local authorization: " + e.getMessage());
             return false;
         }
-    }
-
-    public void applyCodexCliLoginToSettings() throws IOException {
-        codexSettingsManager.applyCodexCliLoginToSettings();
-    }
-
-    public void removeCodexCliLoginFromSettings() throws IOException {
-        codexSettingsManager.removeCodexCliLoginFromSettings();
     }
 
     public JsonObject readCodexCliLoginAccountInfo() {
@@ -2377,20 +2548,21 @@ public class CodemossSettingsService {
                 && codex.get("localConfigAuthorized").getAsBoolean();
     }
 
-    public void setCodexLocalConfigAuthorized(boolean authorized) throws IOException {
-        JsonObject config = readConfig();
-        JsonObject codex;
-        if (config.has("codex") && config.get("codex").isJsonObject()) {
-            codex = config.getAsJsonObject("codex");
-        } else {
-            codex = new JsonObject();
-            codex.add("providers", new JsonObject());
-            codex.addProperty("current", "");
-            config.add("codex", codex);
+    /**
+     * Returns whether the plugin may manage the currently active Codex config.toml.
+     * Managed providers own the active config written by the plugin, while local
+     * CLI configuration still requires explicit authorization.
+     */
+    public boolean isCodexConfigManagementAllowed() throws IOException {
+        String accessMode = getCodexRuntimeAccessMode();
+        if (CODEX_RUNTIME_ACCESS_CLI_LOGIN.equals(accessMode)) {
+            return isCodexLocalConfigAuthorized();
         }
+        return CODEX_RUNTIME_ACCESS_MANAGED.equals(accessMode);
+    }
 
-        codex.addProperty("localConfigAuthorized", authorized);
-        writeConfig(config);
+    public void setCodexLocalConfigAuthorized(boolean authorized) throws IOException {
+        codexProviderManager.setLocalConfigAuthorized(authorized);
     }
 
     public String getCodexRuntimeAccessMode() throws IOException {
@@ -2410,10 +2582,7 @@ public class CodemossSettingsService {
                     : CODEX_RUNTIME_ACCESS_INACTIVE;
         }
 
-        if (!currentId.isEmpty()
-                && codex.has("providers")
-                && codex.get("providers").isJsonObject()
-                && codex.getAsJsonObject("providers").has(currentId)) {
+        if (!currentId.isEmpty() && codexProviderManager.isManagedProviderReady()) {
             return CODEX_RUNTIME_ACCESS_MANAGED;
         }
 

@@ -10,6 +10,7 @@ import com.github.claudecodegui.handler.CodexMcpServerHandler;
 import com.github.claudecodegui.handler.CodexPetHandler;
 import com.github.claudecodegui.handler.CliModelsHandler;
 import com.github.claudecodegui.handler.CliStatusHandler;
+import com.github.claudecodegui.handler.DshHostHandler;
 import com.github.claudecodegui.handler.DependencyHandler;
 import com.github.claudecodegui.handler.DiffHandler;
 import com.github.claudecodegui.handler.core.HandlerContext;
@@ -25,6 +26,7 @@ import com.github.claudecodegui.handler.PromptHandler;
 import com.github.claudecodegui.handler.provider.CustomModelPricingHandler;
 import com.github.claudecodegui.handler.provider.ModelProviderHandler;
 import com.github.claudecodegui.handler.provider.ProviderHandler;
+import com.github.claudecodegui.handler.provider.claude.ClaudePlanUsageHandler;
 import com.github.claudecodegui.handler.RewindHandler;
 import com.github.claudecodegui.handler.RollbackHandler;
 import com.github.claudecodegui.handler.SessionHandler;
@@ -83,6 +85,9 @@ public class ChatWindowDelegate {
         Project getProject();
         ClaudeSDKBridge getClaudeSDKBridge();
         CodexSDKBridge getCodexSDKBridge();
+        default com.github.claudecodegui.provider.grok.GrokSDKBridge getGrokSDKBridge() {
+            return null;
+        }
         Map<String, MarkerCliBridge> getCliBridges();
         ClaudeSession getSession();
         CodemossSettingsService getSettingsService();
@@ -90,6 +95,7 @@ public class ChatWindowDelegate {
         JBCefBrowser getBrowser();
         boolean isDisposed();
         void callJavaScript(String fn, String... args);
+        void executeJavaScriptCode(String jsCode);
         Content getParentContent();
         String getOriginalTabName();
         void setOriginalTabName(String name);
@@ -188,23 +194,33 @@ public class ChatWindowDelegate {
                 claudeSDKBridge.verifyAndCacheNodePath(path);
                 LOG.info("Using manually configured Node.js path: " + path);
             } else {
-                LOG.info("No saved Node.js path found, attempting auto-detection...");
-                com.github.claudecodegui.model.NodeDetectionResult detected =
-                    claudeSDKBridge.detectNodeWithDetails();
+                // Auto-detection spawns shell processes which block the calling thread for several
+                // seconds per attempt. Running this on the EDT freezes the entire IDE. Offload to
+                // a pooled thread; the bridges fall back to invoking "node" by name until the
+                // detection completes and updates them.
+                LOG.info("No saved Node.js path found, scheduling auto-detection on background thread...");
+                ApplicationManager.getApplication().executeOnPooledThread(() -> {
+                    try {
+                        com.github.claudecodegui.model.NodeDetectionResult detected =
+                            claudeSDKBridge.detectNodeWithDetails();
 
-                if (detected != null && detected.isFound() && detected.getNodePath() != null) {
-                    String detectedPath = detected.getNodePath();
-                    String detectedVersion = detected.getNodeVersion();
+                        if (detected != null && detected.isFound() && detected.getNodePath() != null) {
+                            String detectedPath = detected.getNodePath();
+                            String detectedVersion = detected.getNodeVersion();
 
-                    props.setValue(NODE_PATH_PROPERTY_KEY, detectedPath);
-                    applyNodePathToBridges(detectedPath);
-                    claudeSDKBridge.verifyAndCacheNodePath(detectedPath);
+                            props.setValue(NODE_PATH_PROPERTY_KEY, detectedPath);
+                            applyNodePathToBridges(detectedPath);
+                            claudeSDKBridge.verifyAndCacheNodePath(detectedPath);
 
-                    LOG.info("Auto-detected Node.js: " + detectedPath + " (" + detectedVersion + ")");
-                } else {
-                    LOG.warn("Failed to auto-detect Node.js path. Error: " +
-                        (detected != null ? detected.getErrorMessage() : "Unknown error"));
-                }
+                            LOG.info("Auto-detected Node.js: " + detectedPath + " (" + detectedVersion + ")");
+                        } else {
+                            LOG.warn("Failed to auto-detect Node.js path. Error: " +
+                                (detected != null ? detected.getErrorMessage() : "Unknown error"));
+                        }
+                    } catch (Exception e) {
+                        LOG.error("Failed to auto-detect Node.js path: " + e.getMessage(), e);
+                    }
+                });
             }
         } catch (Exception e) {
             LOG.error("Failed to load Node.js path: " + e.getMessage(), e);
@@ -240,14 +256,26 @@ public class ChatWindowDelegate {
         }
     }
 
+    /**
+     * Intentionally a no-op for startup.
+     * <p>
+     * vscode-cc-gui only writes {@code ~/.claude/settings.json} when the user
+     * switches/saves a provider — never when the chat window opens. Auto-sync on
+     * open risked overwriting user/cc-switch credentials with an incomplete
+     * (empty env) provider payload. Provider switch still calls
+     * {@link CodemossSettingsService#applyActiveProviderToClaudeSettings()}.
+     */
     public void syncActiveProvider() {
         try {
-            CodemossSettingsService settingsService = host.getSettingsService();
-            if (settingsService.isLocalProviderActive()) {
-                LOG.info("[ClaudeSDKToolWindow] Local provider active, skipping startup sync");
-                return;
+            // Repair-only pass: fills in provider-managed fields that are missing
+            // from ~/.claude/settings.json, never overwrites existing values.
+            // Local / CLI Login modes are skipped inside the manager.
+            boolean repaired = host.getSettingsService().repairActiveProviderToClaudeSettings();
+            if (repaired) {
+                LOG.info("[ClaudeSDKToolWindow] Repaired missing provider fields in global settings");
+            } else {
+                LOG.info("[ClaudeSDKToolWindow] No missing provider fields to repair");
             }
-            settingsService.applyActiveProviderToClaudeSettings();
         } catch (Exception e) {
             LOG.warn("Failed to sync active provider on startup: " + e.getMessage());
         }
@@ -310,6 +338,10 @@ public class ChatWindowDelegate {
                 host.callJavaScript(functionName, args);
             }
             @Override
+            public void executeJavaScript(String jsCode) {
+                host.executeJavaScriptCode(jsCode);
+            }
+            @Override
             public String escapeJs(String str) {
                 return JsUtils.escapeJs(str);
             }
@@ -319,6 +351,7 @@ public class ChatWindowDelegate {
                 project,
                 claudeSDKBridge,
                 codexSDKBridge,
+                host.getGrokSDKBridge(),
                 settingsService,
                 jsCallback,
                 host::isActiveContent,
@@ -338,6 +371,7 @@ public class ChatWindowDelegate {
         host.setMessageDispatcher(messageDispatcher);
 
         messageDispatcher.registerHandler(new ProviderHandler(handlerContext));
+        messageDispatcher.registerHandler(new ClaudePlanUsageHandler(handlerContext));
         messageDispatcher.registerHandler(new CustomModelPricingHandler(handlerContext, settingsService));
         messageDispatcher.registerHandler(new McpServerHandler(handlerContext));
         messageDispatcher.registerHandler(new McpMarketplaceHandler(handlerContext));
@@ -362,6 +396,7 @@ public class ChatWindowDelegate {
         messageDispatcher.registerHandler(new DependencyHandler(handlerContext));
         messageDispatcher.registerHandler(new CliModelsHandler(handlerContext));
         messageDispatcher.registerHandler(new CliStatusHandler(handlerContext));
+        messageDispatcher.registerHandler(new DshHostHandler(handlerContext));
         messageDispatcher.registerHandler(new ClipboardHandler(handlerContext));
         messageDispatcher.registerHandler(new NodeProcessHandler(handlerContext));
 
@@ -442,7 +477,7 @@ public class ChatWindowDelegate {
             String mode = session != null ? session.getPermissionMode() : "default";
             com.github.claudecodegui.notifications.ClaudeNotifier.setMode(project, mode);
 
-            String model = session != null ? session.getModel() : "claude-sonnet-4-7";
+            String model = session != null ? session.getModel() : "claude-sonnet-5";
             com.github.claudecodegui.notifications.ClaudeNotifier.setModel(project, model);
 
             try {
@@ -713,6 +748,7 @@ public class ChatWindowDelegate {
             return;
         }
 
+        host.getStreamCoalescer().resetDeliveryBaseline();
         try {
             String sessionId = session.getSessionId();
             if (sessionId != null && !sessionId.trim().isEmpty()) {

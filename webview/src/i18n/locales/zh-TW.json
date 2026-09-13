@@ -86,8 +86,7 @@
     "retrySdkStatus": "重試",
     "openSourceBanner": "本專案保證100%開源和免費（謹防盜版項目）",
     "openSourceBannerStar": "點個 Star",
-    "openSourceBannerStarToast": "已複製倉庫地址到剪貼簿，複製到瀏覽器即可訪問 ⭐",
-    "openSourceBannerStarAria": "複製倉庫地址並前往 GitHub 點 Star",
+    "openSourceBannerStarAria": "前往 GitHub 點 Star",
     "goInstallSdk": "前往安裝",
     "commandNotImplemented": "`{{command}}` 功能尚未實現。",
     "clearCommandDescription": "清除對話歷史並新建會話",
@@ -237,7 +236,8 @@
           "grok": "Grok CLI",
           "kimi": "Kimi CLI",
           "opencode": "OpenCode",
-          "pi": "PI CLI"
+          "pi": "PI CLI",
+          "omp": "OMP CLI"
         },
         "currentProviderAuto": "目前使用自動選擇：{{provider}}",
         "currentProviderManual": "目前使用手動選擇的 provider：{{provider}}",
@@ -519,11 +519,18 @@
     "communityDesc": "掃描下方二維碼加入官方微信交流群，獲取最新資訊和技術支援",
     "communityQrTip": "使用微信掃一掃加入交流群",
     "communityQrAlt": "官方微信交流群二維碼",
-    "githubTitle": "GitHub 開源地址",
-    "githubDesc": "本專案已在 GitHub 開源，歡迎 Star 支持",
-    "githubCopyBtn": "複製開源地址",
-    "githubCopied": "開源地址已複製到剪貼簿，請在瀏覽器中訪問",
-    "githubCopyFailed": "複製失敗，請手動複製",
+    "socialDocs": "官方文檔",
+    "socialTitle": "關注我們",
+    "socialGithub": "GitHub 開源倉庫，歡迎 Star",
+    "socialX": "X（Twitter）@ZPeng31310",
+    "socialZhihu": "知乎 @vscodeai",
+    "socialXiaohongshu": "小紅書",
+    "socialDouyin": "抖音，滑鼠懸停掃碼關注",
+    "socialYoutube": "YouTube 頻道 @昆鹏马上优化",
+    "douyinQrAlt": "抖音二維碼",
+    "douyinId": "抖音號：nengyongai",
+    "douyinCopied": "抖音號已複製到剪貼簿",
+    "douyinCopyFailed": "複製失敗，請手動複製",
     "sponsor": "贊助支持",
     "sponsorDesc": "如果這個項目對你有幫助，歡迎贊助支持，你的支持是我持續維護的動力！",
     "alipay": "支付寶",
@@ -862,6 +869,14 @@
         "pi": {
           "name": "PI CLI",
           "description": "極簡終端編碼代理，支援多提供商模型"
+        },
+        "omp": {
+          "name": "OMP CLI",
+          "description": "支援多提供商模型的 Oh My Pi 終端編碼代理"
+        },
+        "dsh": {
+          "name": "DeepSeek Harness",
+          "description": "DeepSeek 終端智慧體 CLI（dsh）"
         }
       },
       "installDialog": {
@@ -879,7 +894,31 @@
       "listTitle": "本機 CLI 工具",
       "summary": "{{installed}} / {{total}} 已安裝",
       "moreComingSoon": "即將支援更多",
-      "copyPath": "複製路徑"
+      "copyPath": "複製路徑",
+      "visibility": {
+        "hide": "在切換選單中隱藏",
+        "show": "在切換選單中顯示"
+      },
+      "dsh": {
+        "groupTitle": "DeepSeek Harness",
+        "cliRowTitle": "CLI 安裝",
+        "cardTitle": "本機宿主",
+        "rowHint": "啟動或接管本機 dsh web",
+        "hint": "DSH 由本機一個常駐 dsh web 宿主承載所有工作階段；外掛會接管已在執行的宿主，而不會重複啟動。",
+        "state": {
+          "checking": "檢測中…",
+          "notInstalled": "未安裝",
+          "notRunning": "未執行",
+          "connected": "已連線"
+        },
+        "adopted": "已接管",
+        "adoptedHint": "已接管正在執行的宿主；外掛不會停止它。",
+        "openWebUi": "開啟 DSH Web UI",
+        "startHost": "立即啟動",
+        "stopHost": "關閉（僅限外掛啟動的宿主）",
+        "autoStart": "需要時自動啟動",
+        "moreActions": "更多"
+      }
     }
   },
   "history": {
@@ -908,7 +947,7 @@
     "loading": "載入歷史記錄中...",
     "loadFailed": "載入失敗",
     "noSessions": "暫無歷史會話",
-    "noSessionsDesc": "目前專案下沒有找到 Claude 會話記錄",
+    "noSessionsDesc": "目前專案下沒有找到會話記錄",
     "totalSessions": "共 {{count}} 個會話 · {{total}} 條訊息",
     "messageCount": "{{count}} 條訊息",
     "searchPlaceholder": "搜尋會話標題...",
@@ -1031,6 +1070,7 @@
   },
   "config": {
     "clickToCopy": "點選複製",
+    "officialDocs": "官方文件",
     "switch": "切換",
     "switchProvider": "切換供應商",
     "runtimeProvider": {
@@ -1388,7 +1428,9 @@
     "keepAllConfirmMessage": "將當前改動作為新基準，後續改動從零開始記錄。",
     "discardAllSuccess": "已撤銷所有檔案更改",
     "discardAllFailed": "撤銷失敗: {{error}}",
-    "keepAllSuccess": "已保存全部，改動記錄已重置"
+    "keepAllSuccess": "已保存全部，改動記錄已重置",
+    "multiAgentBadge": "多 Agent",
+    "multiAgentEdited": "本會話有 {{count}} 個 Agent 修改過此檔案，請留意合併衝突"
   },
   "skills": {
     "title": "Skills",
@@ -1544,11 +1586,7 @@
       },
       "sonnet5": {
         "label": "Sonnet 5",
-        "description": "Sonnet 5 · Sonnet 4.6 升級模型"
-      },
-      "sonnet47": {
-        "label": "Sonnet 4.7",
-        "description": "Sonnet 4.7 · 預設推薦模型"
+        "description": "Sonnet 5 · 預設推薦模型"
       },
       "opus5": {
         "label": "Opus 5",
@@ -1600,32 +1638,45 @@
       }
     }
   },
+  "modelConfig": {
+    "title": "模型設定",
+    "context": "1M 上下文",
+    "contextDefault": "預設",
+    "effort": "思考強度",
+    "speed": "速度",
+    "preset": "預設組合",
+    "model": "模型"
+  },
   "modes": {
     "default": {
-      "label": "Default Mode",
-      "tooltip": "Standard permission behavior",
-      "description": "Requires manual confirmation for each operation, suitable for cautious use"
+      "label": "預設模式",
+      "shortLabel": "預設",
+      "tooltip": "標準權限行為",
+      "description": "需要手動確認每個操作，適合謹慎使用"
     },
     "plan": {
-      "label": "Plan Mode",
-      "tooltip": "Plan mode - read-only analysis",
-      "description": "Uses only read-only tools, generates plan for user approval"
+      "label": "規劃模式",
+      "shortLabel": "規劃",
+      "tooltip": "規劃模式——唯讀分析",
+      "description": "僅使用唯讀工具，產生計劃供使用者審批後執行"
     },
     "acceptEdits": {
-      "label": "Agent Mode",
-      "tooltip": "Automatically accept file edits",
-      "description": "Automatically accept file creation/editing, reducing confirmation steps"
+      "label": "代理模式",
+      "shortLabel": "代理",
+      "tooltip": "自動接受檔案編輯",
+      "description": "自動接受檔案建立/編輯，減少確認步驟"
     },
     "bypassPermissions": {
-      "label": "Auto Mode",
-      "tooltip": "Bypass all permission checks",
-      "description": "Fully automated, bypassing all permission checks [Use with caution]"
+      "label": "自動模式",
+      "shortLabel": "自動",
+      "tooltip": "略過所有權限檢查",
+      "description": "完全自動化，略過所有權限檢查【請謹慎使用】"
     }
   },
   "codexModes": {
     "default": {
       "label": "Suggest (approval)",
-      "tooltip": "Codex approval_policy=untrusted – prompts before editing files or running shell commands.",
+      "tooltip": "Codex approval_policy=on-request – prompts before editing files or running shell commands.",
       "description": "Safest option. Every write or command requires your approval."
     },
     "plan": {
@@ -1642,6 +1693,28 @@
       "label": "Full Auto",
       "tooltip": "Codex approval_policy=never – runs commands and writes files without prompting (workspace sandbox still enforced).",
       "description": "Hands-off mode. Codex executes edits and shell commands immediately."
+    }
+  },
+  "ompModes": {
+    "default": {
+      "label": "預設",
+      "tooltip": "使用所選模型（或 OMP auto）",
+      "description": "使用模型下拉選單中選擇的模型；設為 Auto 時使用 OMP CLI 預設模型。"
+    },
+    "smol": {
+      "label": "Smol",
+      "tooltip": "快速模型角色 (omp --model smol)",
+      "description": "使用為 omp 的 smol 角色設定的模型執行此對話。覆寫模型下拉選單的選擇。"
+    },
+    "slow": {
+      "label": "Slow",
+      "tooltip": "推理模型角色 (omp --model slow)",
+      "description": "使用為 omp 的 slow 角色設定的模型執行此對話。覆寫模型下拉選單的選擇。"
+    },
+    "plan": {
+      "label": "Plan",
+      "tooltip": "規劃模型角色 (omp --model plan)",
+      "description": "使用為 omp 的 plan 角色設定的模型執行此對話。覆寫模型下拉選單的選擇。"
     }
   },
   "providers": {
@@ -1666,11 +1739,18 @@
     "pi": {
       "label": "PI CLI"
     },
+    "omp": {
+      "label": "OMP CLI"
+    },
     "beta": {
       "badge": "Beta",
       "title": "Beta 功能",
       "message": "此功能仍處於 Beta 階段。如果遇到使用 Bug，請及時回饋給作者。"
-    }
+    },
+    "dsh": {
+      "label": "DeepSeek Harness"
+    },
+    "manageCli": "CLI 設定管理"
   },
   "promptEnhancer": {
     "title": "Prompt Enhancer",
@@ -1808,6 +1888,15 @@
       "label": "Fast",
       "description": "Codex 快速回應模式（會產生額外消耗）"
     }
+  },
+  "dshPresets": {
+    "title": "選擇 DeepSeek Harness Agent 預設",
+    "none": { "label": "預設", "description": "dsh 預設 headless 組合（完整工具集）" },
+    "standard": { "label": "標準模式", "description": "功能完整的標準編碼工具集" },
+    "code": { "label": "PTC 模式", "description": "標準能力加 Code Mode" },
+    "minimal": { "label": "極簡模式", "description": "僅提供 bash 與 str_replace_editor" },
+    "cordis": { "label": "創造模式", "description": "標準能力加組合編排能力" },
+    "user": { "description": "安裝在 DSH 主目錄中的自訂預設" }
   },
   "error": {
     "providerNotConfigured": "供應商未設定",

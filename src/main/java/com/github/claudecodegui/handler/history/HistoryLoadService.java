@@ -8,10 +8,12 @@ import com.github.claudecodegui.cache.SessionIndexCache;
 import com.github.claudecodegui.cache.SessionIndexManager;
 import com.github.claudecodegui.provider.claude.ClaudeHistoryReader;
 import com.github.claudecodegui.provider.codex.CodexHistoryReader;
+import com.github.claudecodegui.provider.dsh.DshHistoryReader;
 import com.github.claudecodegui.provider.grok.GrokHistoryReader;
 import com.github.claudecodegui.provider.kimi.KimiHistoryReader;
 import com.github.claudecodegui.provider.opencode.OpenCodeHistoryReader;
 import com.github.claudecodegui.provider.pi.PiHistoryReader;
+import com.github.claudecodegui.provider.omp.OmpHistoryReader;
 import com.google.gson.Gson;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
@@ -77,11 +79,21 @@ class HistoryLoadService {
                     PiHistoryReader piReader = new PiHistoryReader();
                     historyJson = piReader.getSessionsForProjectAsJson(projectPath);
                     LOG.info("[HistoryHandler] PiHistoryReader 返回的 JSON 长度: " + historyJson.length());
+                } else if ("omp".equals(provider)) {
+                    LOG.info("[HistoryHandler] 使用 OmpHistoryReader 读取 OMP 会话 (项目: " + projectPath + ")");
+                    OmpHistoryReader ompReader = new OmpHistoryReader();
+                    historyJson = ompReader.getSessionsForProjectAsJson(projectPath);
+                    LOG.info("[HistoryHandler] OmpHistoryReader 返回的 JSON 长度: " + historyJson.length());
                 } else if ("opencode".equals(provider)) {
                     LOG.info("[HistoryHandler] 使用 OpenCodeHistoryReader 读取 OpenCode 会话 (项目: " + projectPath + ")");
                     OpenCodeHistoryReader openCodeReader = new OpenCodeHistoryReader();
                     historyJson = openCodeReader.getSessionsForProjectAsJson(projectPath);
                     LOG.info("[HistoryHandler] OpenCodeHistoryReader 返回的 JSON 长度: " + historyJson.length());
+                } else if ("dsh".equals(provider)) {
+                    LOG.info("[HistoryHandler] 使用 DshHistoryReader 读取 DSH 会话 (项目: " + projectPath + ")");
+                    DshHistoryReader dshReader = new DshHistoryReader();
+                    historyJson = dshReader.getSessionsForProjectAsJson(projectPath);
+                    LOG.info("[HistoryHandler] DshHistoryReader 返回的 JSON 长度: " + historyJson.length());
                 } else if ("kimi".equals(provider)) {
                     LOG.info("[HistoryHandler] 使用 KimiHistoryReader 读取 Kimi 会话 (项目: " + projectPath + ")");
                     KimiHistoryReader kimiReader = new KimiHistoryReader();
@@ -130,7 +142,7 @@ class HistoryLoadService {
                                             "  console.error('[Backend->Frontend] setHistoryData not available!'); " +
                                             "}";
 
-                    context.executeJavaScriptOnEDT(jsCode);
+                    context.executeJavaScriptQueued(jsCode);
                     LOG.info("[HistoryHandler] JavaScript 代码已注入");
                 });
 
@@ -142,7 +154,7 @@ class HistoryLoadService {
                     String jsCode = "if (window.setHistoryData) { " +
                                             "  window.setHistoryData({ success: false, error: '" + errorMsg + "' }); " +
                                             "}";
-                    context.executeJavaScriptOnEDT(jsCode);
+                    context.executeJavaScriptQueued(jsCode);
                 });
             }
         });
@@ -167,7 +179,7 @@ class HistoryLoadService {
             } else if ("grok".equals(provider)) {
                 // Grok history is read live from disk; no dedicated index cache yet.
                 LOG.info("[HistoryHandler] Grok deep search: reloading from ~/.grok/sessions");
-            } else if ("pi".equals(provider) || "opencode".equals(provider) || "kimi".equals(provider)) {
+            } else if ("pi".equals(provider) || "omp".equals(provider) || "opencode".equals(provider) || "kimi".equals(provider)) {
                 // Disk readers scan live filesystem; no dedicated index cache.
                 LOG.info("[HistoryHandler] " + provider + " deep search: reloading from disk");
             } else if (projectPath != null) {

@@ -41,6 +41,10 @@ public class SessionLifecycleManager {
 
         CodexSDKBridge getCodexSDKBridge();
 
+        default com.github.claudecodegui.provider.grok.GrokSDKBridge getGrokSDKBridge() {
+            return null;
+        }
+
         Map<String, MarkerCliBridge> getCliBridges();
 
         ClaudeSession getSession();
@@ -100,8 +104,12 @@ public class SessionLifecycleManager {
 
         interruptFuture.thenRun(() -> {
             if (oldSession != null) {
-                host.getClaudeSDKBridge().resetPersistentRuntime(oldSession.getRuntimeSessionEpoch());
-                LOG.info("[Lifecycle] Requested daemon runtime reset for old epoch=" + oldSession.getRuntimeSessionEpoch());
+                String oldEpoch = oldSession.getRuntimeSessionEpoch();
+                host.getClaudeSDKBridge().resetPersistentRuntime(oldEpoch);
+                if (host.getGrokSDKBridge() != null) {
+                    host.getGrokSDKBridge().resetPersistentRuntime(oldEpoch);
+                }
+                LOG.info("[Lifecycle] Requested daemon runtime reset for old epoch=" + oldEpoch);
             }
             LOG.info("Old session interrupted, creating new session");
 
@@ -148,8 +156,12 @@ public class SessionLifecycleManager {
 
         interruptFuture.thenRun(() -> {
             if (oldSession != null) {
-                host.getClaudeSDKBridge().resetPersistentRuntime(oldSession.getRuntimeSessionEpoch());
-                LOG.info("[Lifecycle] Requested daemon runtime reset for old epoch=" + oldSession.getRuntimeSessionEpoch());
+                String oldEpoch = oldSession.getRuntimeSessionEpoch();
+                host.getClaudeSDKBridge().resetPersistentRuntime(oldEpoch);
+                if (host.getGrokSDKBridge() != null) {
+                    host.getGrokSDKBridge().resetPersistentRuntime(oldEpoch);
+                }
+                LOG.info("[Lifecycle] Requested daemon runtime reset for old epoch=" + oldEpoch);
             }
             LOG.info("Old session interrupted, creating new session from template");
 
@@ -250,16 +262,16 @@ public class SessionLifecycleManager {
 
         interruptFuture.thenRun(() -> {
             if (oldSession != null) {
-                host.getClaudeSDKBridge().resetPersistentRuntime(oldSession.getRuntimeSessionEpoch());
+                String oldEpoch = oldSession.getRuntimeSessionEpoch();
+                host.getClaudeSDKBridge().resetPersistentRuntime(oldEpoch);
+                if (host.getGrokSDKBridge() != null) {
+                    host.getGrokSDKBridge().resetPersistentRuntime(oldEpoch);
+                }
                 LOG.info("[Lifecycle] Requested daemon runtime reset before history load for old epoch="
-                        + oldSession.getRuntimeSessionEpoch());
+                        + oldEpoch);
             }
 
-            ClaudeSession newSession = new ClaudeSession(
-                    host.getProject(),
-                    host.getClaudeSDKBridge(),
-                    host.getCodexSDKBridge(),
-                    host.getCliBridges());
+            ClaudeSession newSession = createDefaultSession();
             newSession.setPermissionMode(previousPermissionMode);
             newSession.setProvider(provider != null && !provider.trim().isEmpty() ? provider : previousProvider);
             newSession.setModel(modelToRestore);
@@ -275,10 +287,18 @@ public class SessionLifecycleManager {
             newSession.setSessionInfo(sessionId, workingDir);
 
             // Prewarm daemon runtime for the historical session so /context and first message are fast
-            host.getClaudeSDKBridge().prewarmDaemonAsync(workingDir, newSession.getRuntimeSessionEpoch(), sessionId);
+            if ("claude".equals(newSession.getProvider())) {
+                host.getClaudeSDKBridge().prewarmDaemonAsync(workingDir, newSession.getRuntimeSessionEpoch(), sessionId);
+            } else if ("grok".equals(newSession.getProvider()) && host.getGrokSDKBridge() != null) {
+                host.getGrokSDKBridge().prewarmDaemonAsync(workingDir, newSession.getRuntimeSessionEpoch(), sessionId);
+            }
 
             newSession.loadFromServer().thenRun(() -> ApplicationManager.getApplication().invokeLater(() -> {
-                host.callJavaScript("historyLoadComplete");
+                // loadFromServer only enqueues updateMessages through the coalescer; if we
+                // call historyLoadComplete immediately the frontend releases the transition
+                // guard before the snapshot arrives (or a reordered clearMessages can wipe a
+                // stashed snapshot). Flush the coalescer first so messages land before complete.
+                completeHistoryLoadAfterCoalescerFlush(newSession);
             })).exceptionally(ex -> {
                 ApplicationManager.getApplication().invokeLater(() -> {
                     // Release transition guard so the frontend is not permanently stuck
@@ -296,6 +316,28 @@ public class SessionLifecycleManager {
                         JsUtils.escapeJs("Failed to load session: " + ex.getMessage()));
             });
             return null;
+        });
+    }
+
+    /**
+     * Push any pending coalesced message snapshot to the webview, then signal
+     * {@code historyLoadComplete} with the message count. Ensures the transcript
+     * is not lost when the frontend holds {@code __sessionTransitioning} until complete.
+     */
+    private void completeHistoryLoadAfterCoalescerFlush(ClaudeSession loadedSession) {
+        if (host.isDisposed()) {
+            return;
+        }
+        int messageCount = loadedSession != null ? loadedSession.getMessages().size() : 0;
+        StreamMessageCoalescer coalescer = host.getStreamCoalescer();
+        if (coalescer == null) {
+            host.callJavaScript("historyLoadComplete", String.valueOf(messageCount));
+            return;
+        }
+        coalescer.flush(seq -> {
+            if (!host.isDisposed()) {
+                host.callJavaScript("historyLoadComplete", String.valueOf(messageCount));
+            }
         });
     }
 
@@ -425,7 +467,8 @@ public class SessionLifecycleManager {
                 host.getProject(),
                 host.getClaudeSDKBridge(),
                 host.getCodexSDKBridge(),
-                host.getCliBridges());
+                host.getCliBridges(),
+                host.getGrokSDKBridge());
     }
 
     private void completeNewSessionBootstrap(ClaudeSession newSession, String workingDirectory, String successLogPrefix) {
@@ -437,7 +480,11 @@ public class SessionLifecycleManager {
 
         newSession.setSessionInfo(null, workingDirectory);
         LOG.info(successLogPrefix + workingDirectory + ", epoch=" + newSession.getRuntimeSessionEpoch());
-        host.getClaudeSDKBridge().prewarmDaemonAsync(workingDirectory, newSession.getRuntimeSessionEpoch());
+        if ("claude".equals(newSession.getProvider())) {
+            host.getClaudeSDKBridge().prewarmDaemonAsync(workingDirectory, newSession.getRuntimeSessionEpoch());
+        } else if ("grok".equals(newSession.getProvider()) && host.getGrokSDKBridge() != null) {
+            host.getGrokSDKBridge().prewarmDaemonAsync(workingDirectory, newSession.getRuntimeSessionEpoch());
+        }
         fetchSlashCommandsOnStartup();
 
         ApplicationManager.getApplication().invokeLater(() -> {

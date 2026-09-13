@@ -1,11 +1,12 @@
 import { useCallback, useMemo, useState, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { ButtonAreaProps, CodexFastMode, ModelInfo, PermissionMode, ReasoningEffort } from './types';
-import { CodexFastModeSelect, ConfigSelect, ModelSelect, ModeSelect, ProviderSelect, ReasoningSelect } from './selectors';
+import { DEFAULT_CLAUDE_MODEL_ID } from './types';
+import { ConfigSelect, ModeSelect, ModelConfigSelect, ProviderSelect } from './selectors';
 import { STORAGE_KEYS, validateCodexCustomModels } from '../../types/provider';
 import type { CodexCustomModel } from '../../types/provider';
 import { readClaudeModelMapping } from '../../utils/claudeModelMapping';
-import { useCliModels } from '../../hooks/providers/useCliModels';
+import { useCliModels, useOmpRoles } from '../../hooks/providers/useCliModels';
 import { useToolbarSelectorCompact } from './hooks/useToolbarSelectorCompact';
 import { resolveProviderModels } from './resolveProviderModels';
 
@@ -73,10 +74,11 @@ export const ButtonArea = ({
   hasInputContent = false,
   isLoading = false,
   isEnhancing = false,
-  selectedModel = 'claude-sonnet-4-7',
+  selectedModel = DEFAULT_CLAUDE_MODEL_ID,
   permissionMode = 'default',
   currentProvider = 'claude',
   reasoningEffort = 'high',
+  dshPreset = '',
   codexFastMode = 'normal',
   onSubmit,
   onStop,
@@ -85,6 +87,7 @@ export const ButtonArea = ({
   onProviderSelect,
   onReasoningChange,
   onCodexFastModeChange,
+  onDshPresetChange,
   onEnhancePrompt,
   alwaysThinkingEnabled = false,
   onToggleThinking,
@@ -94,12 +97,15 @@ export const ButtonArea = ({
   onAgentSelect,
   onOpenAgentSettings,
   onAddModel,
+  onOpenCliSettings,
   longContextEnabled = true,
   onLongContextChange,
 }: ButtonAreaProps) => {
   const { t } = useTranslation();
   // const fileInputRef = useRef<HTMLInputElement>(null);
   const { cliModels, cliModelsLoading, cliModelsError, cliDefaultModel, cliCatalogHasEntries, refreshCliModels } = useCliModels(currentProvider);
+  // Dynamic omp roles (static smol/slow/plan fallback until loaded).
+  const ompRoles = useOmpRoles();
 
   // Track changes to custom models in localStorage
   // When localStorage changes, updating this version number triggers useMemo recalculation
@@ -155,7 +161,8 @@ export const ButtonArea = ({
   useEffect(() => {
     const isDynamicProvider = currentProvider === 'kimi' || currentProvider === 'opencode'
       || currentProvider === 'pi' || currentProvider === 'codex'
-      || currentProvider === 'grok';
+      || currentProvider === 'grok' || currentProvider === 'omp'
+      || currentProvider === 'dsh';
     if (!isDynamicProvider) return;
     // Only correct once a *real* catalog arrived. Static fallback lists
     // (OPENCODE_MODELS = just "opencode-default", CODEX built-ins, …) must not
@@ -165,7 +172,12 @@ export const ButtonArea = ({
     if (!cliCatalogHasEntries) return;
     if (cliModelsLoading) return;
     if (!availableModels.length || !onModelSelect) return;
-    const exists = availableModels.some((model) => model.id === selectedModel);
+    // OMP roles are not in the model list (they live in ModeSelect), so an
+    // active role must count as a valid selection — otherwise picking
+    // 'smol' in the mode selector would be clobbered back to the default
+    // the moment a catalog arrives.
+    const exists = availableModels.some((model) => model.id === selectedModel)
+      || (currentProvider === 'omp' && ompRoles.some((role) => role.id === selectedModel));
     if (!exists) {
       onModelSelect(cliDefaultModel ?? availableModels[0].id);
     }
@@ -177,6 +189,7 @@ export const ButtonArea = ({
     cliDefaultModel,
     cliCatalogHasEntries,
     cliModelsLoading,
+    ompRoles,
   ]);
 
   /**
@@ -230,6 +243,10 @@ export const ButtonArea = ({
     onCodexFastModeChange?.(mode);
   }, [onCodexFastModeChange]);
 
+  const handleDshPresetChange = useCallback((preset: string) => {
+    onDshPresetChange?.(preset);
+  }, [onDshPresetChange]);
+
   /**
    * Handle enhance prompt button click
    */
@@ -248,6 +265,7 @@ export const ButtonArea = ({
     permissionMode,
     reasoningEffort,
     codexFastMode,
+    dshPreset,
     selectedAgent?.id ?? '',
     cliModelsLoading ? 'loading' : 'ready',
   ].join('|');
@@ -279,12 +297,13 @@ export const ButtonArea = ({
         <ProviderSelect
           value={currentProvider}
           onChange={handleProviderSelect}
+          onOpenCliSettings={onOpenCliSettings}
           compact
         />
         <ModeSelect value={permissionMode} onChange={handleModeSelect} provider={currentProvider} />
-        <ModelSelect
-          value={selectedModel}
-          onChange={handleModelSelect}
+        <ModelConfigSelect
+          selectedModel={selectedModel}
+          onModelSelect={handleModelSelect}
           models={availableModels}
           currentProvider={currentProvider}
           loading={cliModelsLoading}
@@ -293,11 +312,13 @@ export const ButtonArea = ({
           onAddModel={onAddModel}
           longContextEnabled={longContextEnabled}
           onLongContextChange={onLongContextChange}
+          reasoningEffort={reasoningEffort}
+          onReasoningChange={handleReasoningChange}
+          codexFastMode={codexFastMode}
+          onCodexFastModeChange={handleCodexFastModeChange}
+          dshPreset={dshPreset}
+          onDshPresetChange={handleDshPresetChange}
         />
-        <ReasoningSelect value={reasoningEffort} onChange={handleReasoningChange} selectedModel={selectedModel} currentProvider={currentProvider} />
-        {currentProvider === 'codex' && (
-          <CodexFastModeSelect value={codexFastMode} onChange={handleCodexFastModeChange} />
-        )}
       </div>
 
       {/* Right side: tool buttons */}

@@ -9,6 +9,7 @@ import com.github.claudecodegui.provider.grok.GrokHistoryReader;
 import com.github.claudecodegui.provider.kimi.KimiHistoryReader;
 import com.github.claudecodegui.provider.opencode.OpenCodeHistoryReader;
 import com.github.claudecodegui.provider.pi.PiHistoryReader;
+import com.github.claudecodegui.provider.omp.OmpHistoryReader;
 import com.google.gson.Gson;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
@@ -105,7 +106,7 @@ class HistoryExportService {
                                             "  console.error('[Backend->Frontend] onExportSessionData not available!'); " +
                                             "}";
 
-                    context.executeJavaScriptOnEDT(jsCode);
+                    context.executeJavaScriptQueued(jsCode);
                 });
 
                 LOG.info("[HistoryHandler] ========== 导出会话完成 ==========");
@@ -117,7 +118,7 @@ class HistoryExportService {
                     String jsCode = "if (window.addToast) { " +
                                             "  window.addToast('导出失败: " + context.escapeJs(e.getMessage() != null ? e.getMessage() : "未知错误") + "', 'error'); " +
                                             "}";
-                    context.executeJavaScriptOnEDT(jsCode);
+                    context.executeJavaScriptQueued(jsCode);
                 });
             }
         });
@@ -146,6 +147,10 @@ class HistoryExportService {
         if ("pi".equals(provider)) {
             LOG.info("[HistoryHandler] 使用 PiHistoryReader 导出 PI 会话");
             return toJsonArray(new PiHistoryReader().getSessionMessages(sessionId, projectPath));
+        }
+        if ("omp".equals(provider)) {
+            LOG.info("[HistoryHandler] 使用 OmpHistoryReader 导出 OMP 会话");
+            return toJsonArray(new OmpHistoryReader().getSessionMessages(sessionId, projectPath));
         }
         LOG.info("[HistoryHandler] 使用 ClaudeHistoryReader 读取 Claude 会话消息");
         ClaudeHistoryReader historyReader = new ClaudeHistoryReader();

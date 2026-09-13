@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { resolveProviderModels } from './resolveProviderModels';
-import { CODEX_MODELS, GROK_MODELS, CLAUDE_MODELS } from './types';
+import { CODEX_MODELS, GROK_MODELS, CLAUDE_MODELS, OMP_MODELS } from './types';
 
 describe('resolveProviderModels', () => {
   it('uses dynamic Grok catalog when catalogHasEntries is true', () => {
@@ -78,6 +78,41 @@ describe('resolveProviderModels', () => {
         cliCatalogHasEntries: true,
       }),
     ).toEqual(models);
+  });
+
+  it('prepends OMP Auto and appends the catalog for OMP', () => {
+    const catalog = [{ id: 'github-copilot/claude-fable-5', label: 'Claude Fable 5' }];
+    const result = resolveProviderModels({
+      provider: 'omp',
+      cliModels: catalog,
+      cliCatalogHasEntries: true,
+    });
+    expect(result.map((m) => m.id)).toEqual([
+      'auto',
+      'github-copilot/claude-fable-5',
+    ]);
+  });
+
+  it('does not duplicate OMP Auto when cliModels is the static OMP_MODELS fallback', () => {
+    const result = resolveProviderModels({
+      provider: 'omp',
+      cliModels: OMP_MODELS,
+      cliCatalogHasEntries: false,
+    });
+    expect(result.map((m) => m.id)).toEqual(['auto']);
+  });
+
+  it('keeps model roles (smol/slow/plan) out of the OMP model list', () => {
+    // Roles are selected via ModeSelect, not the model dropdown.
+    const catalog = [{ id: 'github-copilot/claude-fable-5', label: 'Claude Fable 5' }];
+    const result = resolveProviderModels({
+      provider: 'omp',
+      cliModels: catalog,
+      cliCatalogHasEntries: true,
+    });
+    expect(result.some((m) => m.id === 'smol')).toBe(false);
+    expect(result.some((m) => m.id === 'slow')).toBe(false);
+    expect(result.some((m) => m.id === 'plan')).toBe(false);
   });
 
   it('puts Claude customs first and keeps built-ins', () => {

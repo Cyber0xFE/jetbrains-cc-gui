@@ -14,6 +14,8 @@
  *   kimi     - Kimi CLI (no SDK; spawns local `kimi` binary)
  *   opencode - OpenCode CLI (no SDK; spawns local `opencode` binary)
  *   pi       - PI CLI (no SDK; spawns local `pi` binary)
+ *   omp      - OMP CLI (no SDK; spawns local `omp` binary)
+ *   dsh      - DeepSeek Harness (Host RPC + WS mux against local `dsh web`)
  *
  * Commands:
  *   send                - Send a message (parameters passed via stdin as JSON)
@@ -34,6 +36,8 @@ import { handleGrokCommand } from './channels/grok-channel.js';
 import { handleKimiCommand } from './channels/kimi-channel.js';
 import { handleOpenCodeCommand } from './channels/opencode-channel.js';
 import { handlePiCommand } from './channels/pi-channel.js';
+import { handleOmpCommand } from './channels/omp-channel.js';
+import { handleDshCommand } from './channels/dsh-channel.js';
 import { getSdkStatus, isClaudeSdkAvailable, isCodexSdkAvailable } from './utils/sdk-loader.js';
 import { injectStartupEnvVars, configureCliIdentity } from './config/api-config.js';
 
@@ -145,6 +149,8 @@ const providerHandlers = {
   kimi: handleKimiCommand,
   opencode: handleOpenCodeCommand,
   pi: handlePiCommand,
+  omp: handleOmpCommand,
+  dsh: handleDshCommand,
   system: handleSystemCommand
 };
 
@@ -155,7 +161,7 @@ const providerHandlers = {
     // Validate provider
     console.error('[DIAG-EXEC] Validating provider...');
     if (!provider || !providerHandlers[provider]) {
-      console.error('Invalid provider. Use "claude", "codex", "grok", "kimi", "opencode", "pi", or "system"');
+      console.error('Invalid provider. Use "claude", "codex", "grok", "kimi", "opencode", "pi", "omp", "dsh", or "system"');
       writeJsonAndExit({
         success: false,
         error: 'Invalid provider: ' + provider

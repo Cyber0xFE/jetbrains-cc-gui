@@ -1,6 +1,6 @@
 <div align="center">
 
-# CC GUI（Claude or Codex）
+# CC GUI（Claude, Codex and More）
 
 > Originally Claude Code GUI
 
@@ -17,7 +17,7 @@
 > To mitigate Claude trademark risks, this project has been renamed to CC GUI (originally Claude Code GUI). The logo has also been updated to reduce Chinese-specific elements. Regarding security, a        
   /security-review audit will be conducted before each minor version release, and a comprehensive claude-code-security audit will be performed every 10 minor versions. 
 
-A powerful IntelliJ IDEA plugin that provides a visual interface for **Claude Code** and **OpenAI Codex** dual AI tools, making AI-assisted programming more efficient and intuitive.
+A powerful IntelliJ IDEA plugin that provides a visual interface for **Claude Code**, **OpenAI Codex** and more AI coding CLIs, making AI-assisted programming more efficient and intuitive.
 
 <img width="850" alt="Image" src="/docs/img/banner.png" />
 
@@ -25,15 +25,21 @@ A powerful IntelliJ IDEA plugin that provides a visual interface for **Claude Co
 
 ## Installation
 
-[CC GUI（Claude or Codex） Installation](https://plugins.jetbrains.com/plugin/29342-cc-gui-claude-or-codex-)
+[CC GUI（Claude, Codex and More） Installation](https://plugins.jetbrains.com/plugin/29342-cc-gui-claude-or-codex-)
 
 ---
 
 ## Key Features
 
-### Dual AI Engine Support
+### Multi AI Engine Support
 - **Claude Code** - Anthropic's official AI programming assistant, supporting Opus 4.5 and other models
 - **OpenAI Codex** - OpenAI's powerful code generation engine
+- **Grok CLI** (Beta) - xAI's command-line coding assistant
+- **Kimi CLI** (Beta) - Moonshot AI's command-line coding assistant
+- **OpenCode** (Beta) - open-source AI coding agent for the terminal
+- **PI CLI** (Beta) - PI command-line coding assistant
+- **OMP CLI** (Beta) - OMP command-line coding assistant
+- **DeepSeek Harness** (Beta) - DeepSeek's command-line coding harness
 
 ### Intelligent Conversation
 - Context-aware AI coding assistant
@@ -147,6 +153,12 @@ Thank you for [AtomGit](https://atomgit.com/zhukunpenglinyutong/idea-claude-code
 ## Acknowledgements
 
 Recently, many bloggers have recommended this project on their own initiative, and I am deeply grateful. Thanks again to bloggers including "沉默的王二", "macrozheng", "JavaGuide", "Java知音", "鲲鹏talk 公众号", and "程序员青戈" for recommending this project. I will keep iterating to make it more comfortable for everyone to use.
+
+---
+
+## Star History
+
+[![Star History](https://star-history.dera.page/svg?repos=zhukunpenglinyutong/jetbrains-cc-gui&type=date&legend=top-left)](https://star-history.dera.page/#zhukunpenglinyutong/jetbrains-cc-gui&type=date&legend=top-left)
 
 <!-- LINK GROUP -->
 

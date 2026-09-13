@@ -3,6 +3,8 @@ import { useTranslation } from 'react-i18next';
 import HistoryView from './components/history/HistoryView';
 import SettingsView from './components/settings';
 import { sendBridgeEvent } from './utils/bridge';
+import { ompModeForModelId } from './hooks/providers/cliProviders';
+import { useOmpRoles } from './hooks/providers/useCliModels';
 import { preloadSlashCommands, forceRefreshPrompts } from './components/ChatInputBox/providers';
 import {
   useScrollBehavior,
@@ -32,6 +34,7 @@ import type { ClaudeMessage } from './types';
 import type { Attachment, ChatInputBoxHandle } from './components/ChatInputBox/types';
 import {
   apply1MContextSuffix,
+  isValidPermissionMode,
   normalizeClaudeModelId,
   strip1MContextSuffix,
 } from './components/ChatInputBox/types';
@@ -96,6 +99,7 @@ const App = () => {
   const {
     currentView, setCurrentView,
     settingsInitialTab, setSettingsInitialTab,
+    settingsProviderSubTab, setSettingsProviderSubTab,
     toasts, addToast, dismissToast, clearToasts,
     setContextInfo,
     searchOpen, setSearchOpen,
@@ -160,14 +164,15 @@ const App = () => {
     claudeSdkMeetsMinimum,
     currentProviderRef,
     activeProviderConfig, claudeSettingsAlwaysThinkingEnabled,
-    reasoningEffort, codexFastMode, streamingEnabledSetting, sendShortcut, autoOpenFileEnabled,
+    reasoningEffort, codexFastMode, dshPreset, streamingEnabledSetting, sendShortcut, autoOpenFileEnabled,
     longContextEnabled,
     usagePercentage, usageUsedTokens, usageMaxTokens,
     setPermissionMode, setCurrentProvider,
     setClaudePermissionMode, setCodexPermissionMode,
     setSelectedClaudeModel, setSelectedCodexModel,
     setSelectedGrokModel, setSelectedKimiModel,
-    setSelectedOpenCodeModel, setSelectedPiModel,
+    setSelectedOpenCodeModel, setSelectedPiModel, setSelectedDshModel,
+    setSelectedOmpModel, setOmpPermissionMode,
     setLongContextEnabled, setReasoningEffort, setCodexFastMode,
     setProviderConfigVersion, setActiveProviderConfig,
     setClaudeSettingsAlwaysThinkingEnabled, setStreamingEnabledSetting,
@@ -176,10 +181,14 @@ const App = () => {
     setUsagePercentage, setUsageUsedTokens, setUsageMaxTokens,
     syncActiveProviderModelMapping,
     handleModeSelect, handleModelSelect, handleProviderSelect,
-    handleReasoningChange, handleCodexFastModeChange, handleAgentSelect, handleToggleThinking,
+    handleReasoningChange, handleCodexFastModeChange, handleDshPresetChange, handleAgentSelect, handleToggleThinking,
     handleStreamingEnabledChange, handleSendShortcutChange,
     handleAutoOpenFileEnabledChange, handleLongContextChange,
   } = useModelProviderState({ addToast, t });
+
+  // Dynamic omp model roles (listModels payload; static smol/slow/plan until
+  // loaded) — needed by applyHistoryModel's omp mode⇔model unification.
+  const ompRoles = useOmpRoles();
 
   // ── Global drag event interception ──
   useEffect(() => {
@@ -335,6 +344,19 @@ const App = () => {
         } else if (provider === 'pi') {
           setSelectedPiModel(model);
           sendBridgeEvent('set_model', model);
+        } else if (provider === 'omp') {
+          setSelectedOmpModel(model);
+          sendBridgeEvent('set_model', model);
+          const ompMode = ompModeForModelId(model, ompRoles);
+          setOmpPermissionMode(ompMode);
+          // Dynamic roles are not in Java's static mode whitelist — set_model
+          // above already carries the role; skip set_mode for them.
+          if (isValidPermissionMode(ompMode)) {
+            sendBridgeEvent('set_mode', ompMode);
+          }
+        } else if (provider === 'dsh') {
+          setSelectedDshModel(model);
+          sendBridgeEvent('set_model', model);
         } else {
           // claude (or unrecognized): apply the claude model directly —
           // handleModelSelect reads currentProvider from a stale closure
@@ -409,7 +431,7 @@ const App = () => {
     interruptSession,
   } = useMessageSender({
     t, addToast,
-    currentProvider, selectedModel, permissionMode, reasoningEffort, selectedAgent, codexFastMode,
+    currentProvider, selectedModel, permissionMode, reasoningEffort, selectedAgent, codexFastMode, dshPreset,
     sdkStatusLoading, currentSdkInstalled,
     sentAttachmentsRef, chatInputRef, messagesContainerRef,
     isUserAtBottomRef, userPausedRef, isStreamingRef,
@@ -570,6 +592,7 @@ const App = () => {
         onHistory={() => setCurrentView('history')}
         onSettings={() => {
           setSettingsInitialTab(undefined);
+          setSettingsProviderSubTab(undefined);
           setCurrentView('settings');
         }}
         onOpenSearch={() => setSearchOpen(true)}
@@ -586,6 +609,7 @@ const App = () => {
         <SettingsView
           onClose={() => setCurrentView('chat')}
           initialTab={settingsInitialTab}
+          initialProviderSubTab={settingsProviderSubTab}
           currentProvider={currentProvider}
           streamingEnabled={streamingEnabledSetting}
           onStreamingEnabledChange={handleStreamingEnabledChange}
@@ -650,6 +674,7 @@ const App = () => {
               claudeSettingsAlwaysThinkingEnabled={claudeSettingsAlwaysThinkingEnabled}
               reasoningEffort={reasoningEffort}
               codexFastMode={codexFastMode}
+              dshPreset={dshPreset}
               streamingEnabledSetting={streamingEnabledSetting}
               sendShortcut={sendShortcut}
               autoOpenFileEnabled={autoOpenFileEnabled}
@@ -662,6 +687,7 @@ const App = () => {
               onAgentSelect={handleAgentSelect}
               onReasoningChange={handleReasoningChange}
               onCodexFastModeChange={handleCodexFastModeChange}
+              onDshPresetChange={handleDshPresetChange}
               onToggleThinking={handleToggleThinking}
               onStreamingEnabledChange={handleStreamingEnabledChange}
               onAutoOpenFileEnabledChange={handleAutoOpenFileEnabledChange}

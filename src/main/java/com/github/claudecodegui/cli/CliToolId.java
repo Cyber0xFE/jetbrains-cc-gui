@@ -7,7 +7,9 @@ public enum CliToolId {
     GROK("grok", "Grok CLI", "grok"),
     KIMI("kimi", "Kimi CLI", "kimi"),
     OPENCODE("opencode", "OpenCode", "opencode"),
-    PI("pi", "PI CLI", "pi");
+    PI("pi", "PI CLI", "pi"),
+    OMP("omp", "OMP CLI", "omp"),
+    DSH("dsh", "DeepSeek Harness", "dsh");
 
     private final String id;
     private final String displayName;

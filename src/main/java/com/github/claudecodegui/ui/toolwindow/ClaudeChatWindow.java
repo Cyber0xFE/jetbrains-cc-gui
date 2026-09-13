@@ -9,10 +9,12 @@ import com.github.claudecodegui.permission.PermissionService;
 import com.github.claudecodegui.provider.claude.ClaudeSDKBridge;
 import com.github.claudecodegui.provider.codex.CodexSDKBridge;
 import com.github.claudecodegui.provider.common.MarkerCliBridge;
-import com.github.claudecodegui.provider.grok.GrokCliBridge;
+import com.github.claudecodegui.provider.dsh.DshCliBridge;
+import com.github.claudecodegui.provider.grok.GrokSDKBridge;
 import com.github.claudecodegui.provider.kimi.KimiCliBridge;
 import com.github.claudecodegui.provider.opencode.OpenCodeCliBridge;
 import com.github.claudecodegui.provider.pi.PiCliBridge;
+import com.github.claudecodegui.provider.omp.OmpCliBridge;
 import com.github.claudecodegui.session.SessionProviderRouter;
 import com.github.claudecodegui.provider.common.DaemonBridge;
 import com.github.claudecodegui.provider.common.MessageCallback;
@@ -57,6 +59,7 @@ import java.awt.event.HierarchyEvent;
 import java.awt.event.HierarchyListener;
 import java.awt.event.WindowAdapter;
 import java.awt.event.WindowEvent;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -72,11 +75,12 @@ public class ClaudeChatWindow {
     private final JPanel mainPanel;
     private final ClaudeSDKBridge claudeSDKBridge;
     private final CodexSDKBridge codexSDKBridge;
+    private final GrokSDKBridge grokSDKBridge;
     private final Map<String, MarkerCliBridge> cliBridges;
-    private final GrokCliBridge grokCliBridge;
     private final KimiCliBridge kimiCliBridge;
     private final OpenCodeCliBridge openCodeCliBridge;
     private final PiCliBridge piCliBridge;
+    private final OmpCliBridge ompCliBridge;
     private final Project project;
     private final CodemossSettingsService settingsService;
     private final HtmlLoader htmlLoader;
@@ -97,6 +101,7 @@ public class ClaudeChatWindow {
     private volatile ClaudeSession session;
     private final WebviewWatchdog webviewWatchdog;
     private final StreamMessageCoalescer streamCoalescer;
+    private final WebviewEventQueue<JBCefBrowser> webviewEventQueue;
 
     private volatile boolean disposed = false;
     private volatile boolean initialized = false;
@@ -146,8 +151,13 @@ public class ClaudeChatWindow {
     private Window observedSurfaceWindow;
     private volatile boolean hasEverBeenFrontendReady = false;
     private final PendingCodeSnippetBuffer pendingCodeSnippetBuffer = new PendingCodeSnippetBuffer();
+    private final PendingFileReferencesBuffer pendingFileReferencesBuffer =
+            new PendingFileReferencesBuffer();
     private volatile boolean slashCommandsFetched = false;
     private final AtomicBoolean restoredHistoryLoadStarted = new AtomicBoolean(false);
+
+    // Shared serializer for structured bridges (Gson instances are thread-safe).
+    private static final Gson GSON = new Gson();
 
     // Daemon event listener for AI title forwarding. Held so it can be removed on dispose.
     private DaemonBridge.DaemonEventListener titleEventListener;
@@ -216,12 +226,15 @@ public class ClaudeChatWindow {
         this.project = project;
         this.claudeSDKBridge = new ClaudeSDKBridge();
         this.codexSDKBridge = new CodexSDKBridge();
-        this.grokCliBridge = new GrokCliBridge();
+        this.grokSDKBridge = new GrokSDKBridge();
         this.kimiCliBridge = new KimiCliBridge();
         this.openCodeCliBridge = new OpenCodeCliBridge();
         this.piCliBridge = new PiCliBridge();
+        this.ompCliBridge = new OmpCliBridge();
+        // Grok uses GrokSDKBridge (persistent ACP / grok agent stdio), not MarkerCliBridge.
         this.cliBridges = SessionProviderRouter.registerCliBridges(
-                this.grokCliBridge, this.kimiCliBridge, this.openCodeCliBridge, this.piCliBridge);
+                this.kimiCliBridge, this.openCodeCliBridge, this.piCliBridge,
+                this.ompCliBridge, new DshCliBridge());
         this.settingsService = new CodemossSettingsService();
         this.htmlLoader = new HtmlLoader(getClass());
         this.mainPanel = new JPanel(new BorderLayout());
@@ -240,15 +253,15 @@ public class ClaudeChatWindow {
         this.mainPanel.setBackground(com.github.claudecodegui.util.ThemeConfigService.getBackgroundColor());
         this.mainPanel.addHierarchyListener(surfaceRefreshHierarchyListener);
 
+        this.webviewEventQueue = new WebviewEventQueue<JBCefBrowser>(
+                () -> this.browser,
+                () -> this.disposed,
+                this::executeQueuedWebviewScript
+        );
         this.streamCoalescer = new StreamMessageCoalescer(new StreamMessageCoalescer.JsCallbackTarget() {
             @Override
             public void callJavaScript(String functionName, String... args) {
                 ClaudeChatWindow.this.callJavaScript(functionName, args);
-            }
-
-            @Override
-            public JBCefBrowser getBrowser() {
-                return browser;
             }
 
             @Override
@@ -259,11 +272,6 @@ public class ClaudeChatWindow {
             @Override
             public HandlerContext getHandlerContext() {
                 return handlerContext;
-            }
-
-            @Override
-            public void onStreamEnded() {
-                ClaudeChatWindow.this.drainDeferredReload();
             }
         });
 
@@ -277,7 +285,7 @@ public class ClaudeChatWindow {
                 () -> frontendReady
         );
 
-        this.session = new ClaudeSession(project, claudeSDKBridge, codexSDKBridge, cliBridges);
+        this.session = new ClaudeSession(project, claudeSDKBridge, codexSDKBridge, cliBridges, grokSDKBridge);
 
         this.chatWindowDelegate = new ChatWindowDelegate(createDelegateHost());
         chatWindowDelegate.loadPermissionModeFromSettings();
@@ -301,6 +309,11 @@ public class ClaudeChatWindow {
             @Override
             public CodexSDKBridge getCodexSDKBridge() {
                 return codexSDKBridge;
+            }
+
+            @Override
+            public GrokSDKBridge getGrokSDKBridge() {
+                return grokSDKBridge;
             }
 
             @Override
@@ -1205,6 +1218,8 @@ public class ClaudeChatWindow {
         cancelScheduledOsrSurfaceRefresh();
         surfaceRefreshCoordinator.invalidate();
         browser = nextBrowser;
+        webviewEventQueue.browserChanged();
+        streamCoalescer.resetDeliveryBaseline();
         if (nextBrowser != null) {
             observedBrowserComponent = nextBrowser.getComponent();
             observedBrowserComponent.addComponentListener(surfaceRefreshComponentListener);
@@ -1363,16 +1378,16 @@ public class ClaudeChatWindow {
         return claudeSDKBridge;
     }
 
+    public GrokSDKBridge getGrokSDKBridge() {
+        return grokSDKBridge;
+    }
+
     public CodexSDKBridge getCodexSDKBridge() {
         return codexSDKBridge;
     }
 
     public Map<String, MarkerCliBridge> getCliBridges() {
         return cliBridges;
-    }
-
-    public GrokCliBridge getGrokCliBridge() {
-        return grokCliBridge;
     }
 
     public KimiCliBridge getKimiCliBridge() {
@@ -1385,6 +1400,10 @@ public class ClaudeChatWindow {
 
     public PiCliBridge getPiCliBridge() {
         return piCliBridge;
+    }
+
+    public OmpCliBridge getOmpCliBridge() {
+        return ompCliBridge;
     }
 
     /**
@@ -1546,10 +1565,31 @@ public class ClaudeChatWindow {
         }
     }
 
+    /**
+     * Add project-tree paths through the dedicated structured file-reference
+     * bridge, buffering the batch until the WebView is ready when necessary.
+     */
+    public void addFileReferencesFromExternal(List<String> filePaths) {
+        if (filePaths == null || filePaths.isEmpty()) {
+            return;
+        }
+        List<String> toEmit = pendingFileReferencesBuffer.offer(filePaths, frontendReady);
+        if (toEmit != null) {
+            addFileReferences(toEmit);
+        }
+    }
+
     private void flushPendingCodeSnippet() {
         String snippet = pendingCodeSnippetBuffer.takePending();
         if (snippet != null) {
             addCodeSnippet(snippet);
+        }
+    }
+
+    private void flushPendingFileReferences() {
+        List<String> filePaths = pendingFileReferencesBuffer.takePending();
+        if (filePaths != null) {
+            addFileReferences(filePaths);
         }
     }
 
@@ -1563,6 +1603,7 @@ public class ClaudeChatWindow {
         }
         hasEverBeenFrontendReady = true;
         flushPendingCodeSnippet();
+        flushPendingFileReferences();
         ApplicationManager.getApplication().invokeLater(() -> {
             completeFrontendReadyUiUpdate(
                     disposed,
@@ -2078,22 +2119,21 @@ public class ClaudeChatWindow {
         chatWindowDelegate.sendQuickFixMessage(prompt, isQuickFix, callback);
     }
 
+    /** Execute raw JavaScript through the same ordered webview queue as callback events. */
     public void executeJavaScriptCode(String jsCode) {
-        JBCefBrowser targetBrowser = this.browser;
-        if (this.disposed || targetBrowser == null) {
+        webviewEventQueue.enqueueRaw(jsCode);
+    }
+
+    private void executeQueuedWebviewScript(JBCefBrowser targetBrowser, String jsCode) {
+        if (this.disposed || this.browser != targetBrowser) {
             return;
         }
-        ApplicationManager.getApplication().invokeLater(() -> {
-            if (this.disposed || this.browser != targetBrowser) {
-                return;
-            }
-            try {
-                org.cef.browser.CefBrowser cefBrowser = targetBrowser.getCefBrowser();
-                cefBrowser.executeJavaScript(jsCode, cefBrowser.getURL(), 0);
-            } catch (Exception | LinkageError e) {
-                LOG.warn("Failed to execute raw JS code: " + e.getMessage(), e);
-            }
-        });
+        try {
+            org.cef.browser.CefBrowser cefBrowser = targetBrowser.getCefBrowser();
+            cefBrowser.executeJavaScript(jsCode, cefBrowser.getURL(), 0);
+        } catch (Exception | LinkageError e) {
+            LOG.warn("Failed to execute queued webview JavaScript: " + e.getMessage(), e);
+        }
     }
 
     // ==================== JavaScript Bridge ====================
@@ -2102,54 +2142,11 @@ public class ClaudeChatWindow {
             java.util.regex.Pattern.compile("^[a-zA-Z_$][a-zA-Z0-9_$.]*$");
 
     void callJavaScript(String functionName, String... args) {
-        JBCefBrowser targetBrowser = this.browser;
-        if (this.disposed || targetBrowser == null) {
-            LOG.warn("Cannot call JS function " + functionName + ": disposed=" + this.disposed
-                    + ", browser=" + (targetBrowser == null ? "null" : "exists"));
-            return;
-        }
-
         if (functionName == null || !SAFE_JS_FUNCTION_NAME.matcher(functionName).matches()) {
             LOG.error("Invalid JavaScript function name rejected: " + functionName);
             return;
         }
-
-        ApplicationManager.getApplication().invokeLater(() -> {
-            if (this.disposed || this.browser != targetBrowser) {
-                return;
-            }
-            try {
-                org.cef.browser.CefBrowser cefBrowser = targetBrowser.getCefBrowser();
-                String callee = functionName;
-                if (!functionName.contains(".")) {
-                    callee = "window." + functionName;
-                }
-
-                StringBuilder argsJs = new StringBuilder();
-                if (args != null) {
-                    for (int i = 0; i < args.length; i++) {
-                        if (i > 0) { argsJs.append(", "); }
-                        String arg = args[i] == null ? "" : args[i];
-                        argsJs.append("'").append(arg).append("'");
-                    }
-                }
-
-                String checkAndCall =
-                        "(function() {" +
-                                "  try {" +
-                                "    if (typeof " + callee + " === 'function') {" +
-                                "      " + callee + "(" + argsJs + ");" +
-                                "    }" +
-                                "  } catch (e) {" +
-                                "    console.error('[Backend->Frontend] Failed to call " + functionName + ":', e);" +
-                                "  }" +
-                                "})();";
-
-                cefBrowser.executeJavaScript(checkAndCall, cefBrowser.getURL(), 0);
-            } catch (Exception | LinkageError e) {
-                LOG.warn("Failed to call JS function: " + functionName + ", error: " + e.getMessage(), e);
-            }
-        });
+        webviewEventQueue.enqueue(functionName, args);
     }
 
     void handleJavaScriptMessage(int pageGeneration, String message) {
@@ -2245,6 +2242,10 @@ public class ClaudeChatWindow {
             @Override
             public void onSessionIdReceived(String newSessionId) {
                 super.onSessionIdReceived(newSessionId);
+                if (newSessionId == null || newSessionId.trim().isEmpty()
+                        || newSessionId.equals(sessionId)) {
+                    return;
+                }
                 sessionId = newSessionId;
                 persistTabSessionState();
             }
@@ -2421,6 +2422,10 @@ public class ClaudeChatWindow {
         return streamActive ? SafetyDrainAction.RECHECK_LATER : SafetyDrainAction.DRAIN;
     }
 
+    static boolean shouldReconcileTranscriptAtStreamEnd(String provider, String sessionId) {
+        return "grok".equals(provider) && sessionId != null && !sessionId.isBlank();
+    }
+
     /** (Re)arm the safety backstop; overlapping arms collapse to one pending tick. */
     private void scheduleDeferredReloadSafetyDrain() {
         if (disposed) {
@@ -2462,7 +2467,8 @@ public class ClaudeChatWindow {
      * only after the user reopens the session.
      *
      * <p>Thread-safety: {@code defer} is called from the daemon event thread,
-     * {@code takeIfRunnable} from the coalescer's onStreamEnded hook; both are
+     * {@code takeIfRunnable} from the adapter's stream-end callback (ordered
+     * after the final snapshot enters the webview queue); both are
      * fully synchronized so a defer/drain interleave never loses or duplicates a
      * pending reload. {@code take} atomically reads-clears-and-gates in one
      * critical section (no read/clear window). Coalescing is last-writer-wins:
@@ -2593,6 +2599,19 @@ public class ClaudeChatWindow {
     }
 
     private void onStreamEnded() {
+        // Runs as the adapter's stream-end callback, already ordered after the
+        // final snapshot and the onStreamEnd signal have entered the webview
+        // queue — the safe point to reconcile and drain a deferred reload.
+        ClaudeSession current = this.session;
+        if (current != null && shouldReconcileTranscriptAtStreamEnd(
+                current.getProvider(), current.getSessionId())) {
+            // Grok's live ACP stream can omit file-tool blocks that are present
+            // in chat_history.jsonl. Reuse the proven same-session reload path
+            // once the turn is idle so derived edit statistics use final data.
+            this.deferredReload.defer(current.getSessionId());
+        }
+        this.drainDeferredReload();
+
         if (session == null) {
             return;
         }
@@ -2691,6 +2710,25 @@ public class ClaudeChatWindow {
         }
     }
 
+    private void addFileReferences(List<String> filePaths) {
+        if (filePaths == null || filePaths.isEmpty()) {
+            return;
+        }
+
+        // Gson emits a JavaScript array literal, preserving each complete path
+        // (including spaces) as one typed callback argument.
+        String pathsJson = GSON.toJson(filePaths);
+        // This method can run on a bridge callback thread (frontend-ready
+        // flush), so touch the Swing component on the EDT.
+        ApplicationManager.getApplication().invokeLater(() -> {
+            JBCefBrowser targetBrowser = this.browser;
+            if (!this.disposed && targetBrowser != null) {
+                targetBrowser.getComponent().requestFocus();
+            }
+        });
+        executeJavaScriptCode("window.insertFileReferencesAtCursor?.(" + pathsJson + ");");
+    }
+
     /**
      * Focus the chat input field in the frontend.
      * Called when Ctrl+Alt+K activates the panel without a selection.
@@ -2724,6 +2762,7 @@ public class ClaudeChatWindow {
             return;
         }
         this.disposed = true;
+        this.webviewEventQueue.dispose();
         JBCefBrowser targetBrowser = this.browser;
         cancelScheduledOsrSurfaceRefresh();
         surfaceRefreshCoordinator.invalidate();
@@ -2826,6 +2865,18 @@ public class ClaudeChatWindow {
             }
         } catch (Exception e) {
             LOG.warn("Failed to clean up Codex processes: " + e.getMessage());
+        }
+
+        try {
+            if (grokSDKBridge != null) {
+                int activeCount = grokSDKBridge.getActiveProcessCount();
+                if (activeCount > 0) {
+                    LOG.info("Cleaning up " + activeCount + " active Grok process(es)...");
+                }
+                grokSDKBridge.cleanupAllProcesses();
+            }
+        } catch (Exception e) {
+            LOG.warn("Failed to clean up Grok processes: " + e.getMessage());
         }
 
         try {
@@ -2960,20 +3011,54 @@ public class ClaudeChatWindow {
             }
             ClaudeSession current = session;
             if (current == null) {
+                callJavaScript("historyLoadComplete", "0");
                 return;
             }
             String currentId = current.getSessionId();
             if (currentId == null) {
+                callJavaScript("historyLoadComplete", "0");
                 return;
             }
             if (streamCoalescer != null && streamCoalescer.isStreamActive()) {
                 deferredReload.defer(currentId);
                 LOG.info("[ClaudeChatWindow] Same-session resume deferred — "
                         + "turn streaming, will reload at stream end, sessionId=" + currentId);
+                // Frontend may have begun a transition (cleared the list). Release the
+                // guard now so a later deferred reload can paint; if the list is empty
+                // the stream-end drain will repopulate it.
+                callJavaScript("historyLoadComplete", String.valueOf(current.getMessages().size()));
                 return;
             }
             LOG.info("[ClaudeChatWindow] Same-session resume soft reload (no interrupt), sessionId=" + currentId);
-            requestSessionReload(currentId);
+            // Do not only requestSessionReload: that path never signals historyLoadComplete,
+            // so a frontend that cleared the list under __sessionTransitioning stays blank.
+            ClaudeSession restoring = current;
+            restoring.loadFromServer().thenRun(() -> ApplicationManager.getApplication().invokeLater(() -> {
+                if (disposed || session != restoring) {
+                    callJavaScript("historyLoadComplete", "0");
+                    return;
+                }
+                int count = restoring.getMessages().size();
+                if (streamCoalescer != null) {
+                    streamCoalescer.flush(seq -> {
+                        if (!disposed) {
+                            callJavaScript("historyLoadComplete", String.valueOf(count));
+                        }
+                    });
+                } else {
+                    callJavaScript("historyLoadComplete", String.valueOf(count));
+                }
+            })).exceptionally(ex -> {
+                LOG.warn("[ClaudeChatWindow] Same-session soft reload failed: " + ex.getMessage(), ex);
+                ApplicationManager.getApplication().invokeLater(() -> {
+                    if (!disposed) {
+                        callJavaScript("historyLoadComplete");
+                        callJavaScript("addErrorMessage",
+                                JsUtils.escapeJs("Failed to reload session: " + ex.getMessage()));
+                    }
+                });
+                return null;
+            });
         });
     }
 
@@ -2992,6 +3077,11 @@ public class ClaudeChatWindow {
             @Override
             public CodexSDKBridge getCodexSDKBridge() {
                 return codexSDKBridge;
+            }
+
+            @Override
+            public GrokSDKBridge getGrokSDKBridge() {
+                return grokSDKBridge;
             }
 
             @Override
@@ -3102,6 +3192,11 @@ public class ClaudeChatWindow {
             @Override
             public void callJavaScript(String fn, String... args) {
                 ClaudeChatWindow.this.callJavaScript(fn, args);
+            }
+
+            @Override
+            public void executeJavaScriptCode(String jsCode) {
+                ClaudeChatWindow.this.executeJavaScriptCode(jsCode);
             }
 
             @Override

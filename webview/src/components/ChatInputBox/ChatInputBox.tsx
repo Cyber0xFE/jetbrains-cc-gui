@@ -14,6 +14,7 @@ import type {
   ChatInputBoxProps,
   PermissionMode,
 } from './types.js';
+import { DEFAULT_CLAUDE_MODEL_ID } from './types.js';
 import { ChatInputBoxHeader } from './ChatInputBoxHeader.js';
 import { ChatInputBoxFooter } from './ChatInputBoxFooter.js';
 import { ResizeHandles } from './ResizeHandles.js';
@@ -76,7 +77,7 @@ export const ChatInputBox = memo(forwardRef<ChatInputBoxHandle, ChatInputBoxProp
   (
     {
       isLoading = false,
-      selectedModel = 'claude-sonnet-4-7',
+      selectedModel = DEFAULT_CLAUDE_MODEL_ID,
       permissionMode = 'default',
       currentProvider = 'claude',
       usagePercentage = 0,
@@ -99,6 +100,8 @@ export const ChatInputBox = memo(forwardRef<ChatInputBoxHandle, ChatInputBoxProp
       onReasoningChange,
       codexFastMode = 'normal',
       onCodexFastModeChange,
+      dshPreset,
+      onDshPresetChange,
       activeFile,
       selectedLines,
       onClearContext,
@@ -112,6 +115,7 @@ export const ChatInputBox = memo(forwardRef<ChatInputBoxHandle, ChatInputBoxProp
       onOpenAgentSettings,
       onOpenPromptSettings,
       onOpenModelSettings,
+      onOpenCliSettings,
       hasMessages = false,
       onRewind,
       statusPanelExpanded = true,
@@ -204,7 +208,9 @@ export const ChatInputBox = memo(forwardRef<ChatInputBoxHandle, ChatInputBoxProp
     }, [renderFileTags, renderQuoteTags]);
 
     // Tooltip hook
-    const { tooltip, handleMouseOver, handleMouseLeave } = useTooltip();
+    const { tooltip, handleMouseOver, handleMouseLeave } = useTooltip({
+      containerRef: editableRef,
+    });
 
     // Context menu hook
     const ctxMenu = useContextMenu();
@@ -774,6 +780,7 @@ export const ChatInputBox = memo(forwardRef<ChatInputBoxHandle, ChatInputBoxProp
           currentProvider={currentProvider}
           reasoningEffort={reasoningEffort}
           codexFastMode={codexFastMode}
+          dshPreset={dshPreset}
           onSubmit={handleSubmit}
           onStop={onStop}
           onModeSelect={handleModeSelect}
@@ -781,6 +788,7 @@ export const ChatInputBox = memo(forwardRef<ChatInputBoxHandle, ChatInputBoxProp
           onProviderSelect={onProviderSelect}
           onReasoningChange={onReasoningChange}
           onCodexFastModeChange={onCodexFastModeChange}
+          onDshPresetChange={onDshPresetChange}
           onEnhancePrompt={handleEnhancePrompt}
           alwaysThinkingEnabled={alwaysThinkingEnabled}
           onToggleThinking={onToggleThinking}
@@ -791,6 +799,7 @@ export const ChatInputBox = memo(forwardRef<ChatInputBoxHandle, ChatInputBoxProp
           onOpenAgentSettings={onOpenAgentSettings}
           onAddModel={onOpenModelSettings}
           onClearAgent={() => onAgentSelect?.(null)}
+          onOpenCliSettings={onOpenCliSettings}
           longContextEnabled={longContextEnabled}
           onLongContextChange={onLongContextChange}
           fileCompletion={fileCompletion}

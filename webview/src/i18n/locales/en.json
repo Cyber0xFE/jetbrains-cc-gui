@@ -103,8 +103,7 @@
     "retrySdkStatus": "Retry",
     "openSourceBanner": "This project is guaranteed to be 100% open source and free (beware of pirated projects)",
     "openSourceBannerStar": "Star",
-    "openSourceBannerStarToast": "Repo link copied to clipboard — paste it in your browser to visit ⭐",
-    "openSourceBannerStarAria": "Copy repository link and star on GitHub",
+    "openSourceBannerStarAria": "Open the repository on GitHub and star it",
     "goInstallSdk": "Go to Install",
     "sdkTooLowForFable": "Claude SDK version is too low for the Fable model. Update the Claude Code SDK in Settings.",
     "updateSdk": "Update SDK",
@@ -166,6 +165,7 @@
       },
       "tabs": {
         "basic": "Basic",
+        "actions": "Actions",
         "bubble": "Bubbles",
         "local": "Custom",
         "petdex": "Petdex"
@@ -176,6 +176,7 @@
       "disabled": "Disabled",
       "preview": "Pet preview",
       "currentPet": "Current pet",
+      "currentPetHint": "Choose from locally installed pets.",
       "petSearchPlaceholder": "Search alias, original name, or ID",
       "noMatchingLocalPets": "No matching installed pets",
       "alias": "Local alias",
@@ -184,9 +185,70 @@
       "saveAlias": "Save alias",
       "clearAlias": "Clear alias",
       "size": "Size",
+      "sizeHint": "Applied to the pet in the current window.",
       "opacity": "Opacity",
+      "opacityHint": "Reduce obstruction over the editor while inactive.",
       "showStatusIndicator": "Show status dot",
+      "showStatusIndicatorHint": "Show the current task state next to the floating pet.",
+      "confirmBeforeDelete": "Confirm before deleting a pet",
+      "confirmBeforeDeleteHint": "Require confirmation before removing a local pet.",
+      "displayAndOperations": "Pet display and operations",
+      "refreshAssets": "Refresh assets",
+      "delete": "Delete",
+      "deleteConfirmTitle": "Delete local pet?",
+      "deleteConfirm": "Delete {{name}} from local pet storage? This cannot be undone.",
+      "deleteSuccess": "Pet deleted",
       "resetPosition": "Reset position",
+      "actionsTitle": "Status actions",
+      "actionsDescription": "Choose one or more sprite actions for each task status.",
+      "actionsHint": "One selected action is chosen at random when a status begins. Action mappings apply to animated 8x9 pets; static images use the full image.",
+      "actionStateLabel": "Task status",
+      "actionMappingTitle": "Action mapping",
+      "actionSelectedCount": "{{count}} selected",
+      "actionStateDescriptions": {
+        "idle": "Choose an animation while waiting for the next task.",
+        "success": "Choose an animation when a task completes.",
+        "thinking": "Choose an animation while the model is reasoning.",
+        "running": "Choose an animation while a tool or task is running.",
+        "error": "Choose an animation when a task needs attention."
+      },
+      "actionDescriptions": {
+        "idle": "Default resting frame",
+        "running-right": "Continuous rightward motion",
+        "running-left": "Continuous leftward motion",
+        "waving": "Short greeting loop",
+        "jumping": "Completion or reminder",
+        "failed": "Exceptional state animation",
+        "waiting": "Brief pause",
+        "running": "Loop while running",
+        "review": "Review animation"
+      },
+      "actionPreview": "Action preview",
+      "actionPreviewHint": "Choose a sprite action to inspect.",
+      "previewAction": "Preview action",
+      "previewFrame": "Frame",
+      "playPreview": "Play preview",
+      "pausePreview": "Pause preview",
+      "actionPreviewSpriteHint": "Shows the selected spritesheet action frame.",
+      "actionPreviewStaticHint": "Static images have no action frames; the full image is shown.",
+      "visualStates": {
+        "idle": "Idle",
+        "success": "Success",
+        "thinking": "Thinking",
+        "running": "Running",
+        "error": "Error"
+      },
+      "actions": {
+        "idle": "Idle",
+        "running-right": "Running right",
+        "running-left": "Running left",
+        "waving": "Waving",
+        "jumping": "Jumping",
+        "failed": "Failed",
+        "waiting": "Waiting",
+        "running": "Working",
+        "review": "Review"
+      },
       "refreshLocalPets": "Refresh local pets",
       "openPetDirectory": "Open pet directory",
       "localPetOperationFailed": "The local pet operation failed. Check ~/.codex/pets permissions.",
@@ -206,19 +268,25 @@
       "hatchName": "Pet name",
       "hatchStyle": "Visual style",
       "hatchPrompt": "Pet description",
+      "referenceImage": "Reference image",
+      "petDirectory": "Pet directory",
+      "petDirectoryHint": "Local pets and generated assets are managed together.",
+      "hatchCommandHint": "The command is sent to the active Codex input for execution.",
       "noReference": "No reference image selected",
       "chooseReference": "Choose reference",
       "clearReference": "Clear reference",
       "prepareCreatePet": "Prepare create command",
       "prepareRepairPet": "Prepare repair command",
       "hatchCommandPrepared": "Command added to the active Codex input. Review it before sending.",
+      "hatchReplaceDraftConfirmTitle": "Replace current chat draft?",
       "hatchReplaceDraftConfirm": "Replace the current chat draft with this hatch-pet command?",
+      "hatchReplaceDraftAction": "Replace draft",
       "hatchCommandFailed": "The hatch-pet command could not be prepared.",
       "hatchSkillNotReady": "The hatch-pet Skill is not installed correctly.",
       "hatchInputRequired": "Enter a name or description, or choose a reference image.",
       "hatchRequiresCodex": "Switch to a Codex tab before preparing a hatch-pet command.",
       "bubbleTitle": "Pet bubbles",
-      "bubbleDescription": "Show short status bubbles for live Codex tasks. Bubble text uses templates only and never includes chat content.",
+      "bubbleDescription": "Show short status bubbles for live Claude Code and Codex tasks. Bubble text uses templates only and never includes chat content.",
       "bubbleDuration": "Bubble duration (seconds)",
       "bubbleSize": "Bubble size",
       "bubbleShowForBackgroundTabs": "Show bubbles from background tabs",
@@ -291,6 +359,8 @@
       "httpError": "Petdex returned HTTP {{status}}. Please try again later.",
       "unknownError": "Operation failed ({{code}}). Check idea.log for details.",
       "uninstall": "Uninstall",
+      "uninstallConfirmTitle": "Uninstall Pet?",
+      "uninstallConfirm": "Uninstall {{name}} and remove its managed local files?",
       "processing": "Processing",
       "installedExternally": "Installed locally",
       "installSuccess": "Pet installed and selected",
@@ -408,7 +478,8 @@
           "grok": "Grok CLI",
           "kimi": "Kimi CLI",
           "opencode": "OpenCode",
-          "pi": "PI CLI"
+          "pi": "PI CLI",
+          "omp": "OMP CLI"
         },
         "currentProviderAuto": "Currently using automatic selection: {{provider}}",
         "currentProviderManual": "Currently using manually selected provider: {{provider}}",
@@ -579,6 +650,14 @@
         "pi": {
           "name": "PI CLI",
           "description": "Minimal terminal coding agent with multi-provider model support"
+        },
+        "omp": {
+          "name": "OMP CLI",
+          "description": "Oh My Pi terminal coding agent with multi-provider model support"
+        },
+        "dsh": {
+          "name": "DeepSeek Harness",
+          "description": "DeepSeek terminal agent CLI (dsh)"
         }
       },
       "installDialog": {
@@ -596,7 +675,31 @@
       "listTitle": "Local CLI tools",
       "summary": "{{installed}} / {{total}} installed",
       "moreComingSoon": "More coming soon",
-      "copyPath": "Copy path"
+      "copyPath": "Copy path",
+      "visibility": {
+        "hide": "Hide in provider switcher",
+        "show": "Show in provider switcher"
+      },
+      "dsh": {
+        "groupTitle": "DeepSeek Harness",
+        "cliRowTitle": "CLI install",
+        "cardTitle": "Local host",
+        "rowHint": "Start or adopt the local dsh web host",
+        "hint": "One persistent local dsh web host serves all sessions; the plugin adopts a running host instead of spawning a second one.",
+        "state": {
+          "checking": "Checking…",
+          "notInstalled": "Not installed",
+          "notRunning": "Not running",
+          "connected": "Connected"
+        },
+        "adopted": "adopted",
+        "adoptedHint": "Adopted an already-running host; it is never stopped by the plugin.",
+        "openWebUi": "Open DSH Web UI",
+        "startHost": "Start host",
+        "stopHost": "Stop host (plugin-spawned only)",
+        "autoStart": "Auto-start when needed",
+        "moreActions": "More"
+      }
     },
     "pluginModels": {
       "title": "Custom Models",
@@ -782,11 +885,18 @@
     "versionHistoryDesc": "View all version update records",
     "communityQrTip": "Scan with WeChat to join the community",
     "communityQrAlt": "Official WeChat community QR code",
-    "githubTitle": "GitHub Repository",
-    "githubDesc": "This project is open source on GitHub. Star us to show your support!",
-    "githubCopyBtn": "Copy Repository URL",
-    "githubCopied": "Repository URL copied to clipboard. Please visit it in your browser.",
-    "githubCopyFailed": "Failed to copy. Please copy manually.",
+    "socialDocs": "Official Documentation",
+    "socialTitle": "Follow Us",
+    "socialGithub": "GitHub repository — star us!",
+    "socialX": "X (Twitter) @ZPeng31310",
+    "socialZhihu": "Zhihu @vscodeai",
+    "socialXiaohongshu": "Xiaohongshu (RED)",
+    "socialDouyin": "Douyin — hover to scan and follow",
+    "socialYoutube": "YouTube channel",
+    "douyinQrAlt": "Douyin QR code",
+    "douyinId": "Douyin ID: nengyongai",
+    "douyinCopied": "Douyin ID copied to clipboard",
+    "douyinCopyFailed": "Failed to copy. Please copy manually.",
     "sponsor": "Sponsor",
     "sponsorDesc": "If this project helps you, consider sponsoring to support ongoing maintenance!",
     "alipay": "Alipay",
@@ -1231,7 +1341,7 @@
     "loading": "Loading history...",
     "loadFailed": "Load failed",
     "noSessions": "No history sessions",
-    "noSessionsDesc": "No Claude session records found in current project",
+    "noSessionsDesc": "No session records found in current project",
     "totalSessions": "{{count}} sessions · {{total}} messages",
     "messageCount": "{{count}} messages",
     "searchPlaceholder": "Search session titles...",
@@ -1355,6 +1465,7 @@
   },
   "config": {
     "clickToCopy": "Click to copy",
+    "officialDocs": "Official Docs",
     "switch": "Switch",
     "switchProvider": "Switch provider",
     "runtimeProvider": {
@@ -1730,7 +1841,9 @@
     "keepAllConfirmMessage": "Accept current changes as baseline. Future changes will be tracked from zero.",
     "discardAllSuccess": "All changes discarded",
     "discardAllFailed": "Discard failed: {{error}}",
-    "keepAllSuccess": "All changes kept, tracking reset"
+    "keepAllSuccess": "All changes kept, tracking reset",
+    "multiAgentBadge": "Multi-agent",
+    "multiAgentEdited": "{{count}} agents edited this file in this session — review carefully"
   },
   "skills": {
     "title": "Skills",
@@ -1915,11 +2028,7 @@
       },
       "sonnet5": {
         "label": "Sonnet 5",
-        "description": "Sonnet 5 · Upgraded Sonnet model"
-      },
-      "sonnet47": {
-        "label": "Sonnet 4.7",
-        "description": "Sonnet 4.7 · Use the default model"
+        "description": "Sonnet 5 · Use the default model"
       },
       "opus5": {
         "label": "Opus 5",
@@ -1971,24 +2080,37 @@
       }
     }
   },
+  "modelConfig": {
+    "title": "Model settings",
+    "context": "1M Context",
+    "contextDefault": "Default",
+    "effort": "Effort",
+    "speed": "Speed",
+    "preset": "Preset",
+    "model": "Model"
+  },
   "modes": {
     "default": {
       "label": "Default Mode",
+      "shortLabel": "Default",
       "tooltip": "Standard permission behavior",
       "description": "Requires manual confirmation for each operation, suitable for cautious use"
     },
     "plan": {
       "label": "Plan Mode",
+      "shortLabel": "Plan",
       "tooltip": "Plan mode - read-only analysis",
       "description": "Uses only read-only tools, generates plan for user approval"
     },
     "acceptEdits": {
       "label": "Agent Mode",
+      "shortLabel": "Agent",
       "tooltip": "Automatically accept file edits",
       "description": "Automatically accept file creation/editing, reducing confirmation steps"
     },
     "bypassPermissions": {
       "label": "Auto Mode",
+      "shortLabel": "Auto",
       "tooltip": "Bypass all permission checks",
       "description": "Fully automated, bypassing all permission checks [Use with caution]"
     }
@@ -1996,11 +2118,12 @@
   "codexModes": {
     "default": {
       "label": "Suggest (approval)",
-      "tooltip": "Codex approval_policy=untrusted – prompts before editing files or running shell commands.",
+      "tooltip": "Codex approval_policy=on-request – prompts before editing files or running shell commands.",
       "description": "Safest option. Every write or command requires your approval."
     },
     "plan": {
       "label": "Plan Mode",
+      "shortLabel": "Plan",
       "tooltip": "Plan mode - read-only analysis",
       "description": "Uses only read-only tools, generates plan for user approval"
     },
@@ -2013,6 +2136,28 @@
       "label": "Full Auto",
       "tooltip": "Codex approval_policy=never – runs commands and writes files without prompting (workspace sandbox still enforced).",
       "description": "Hands-off mode. Codex executes edits and shell commands immediately."
+    }
+  },
+  "ompModes": {
+    "default": {
+      "label": "Default",
+      "tooltip": "Use the selected model (or OMP auto)",
+      "description": "Uses the model chosen in the model dropdown, or the OMP CLI default when set to Auto."
+    },
+    "smol": {
+      "label": "Smol",
+      "tooltip": "Fast model role (omp --model smol)",
+      "description": "Runs this conversation with the model configured for omp's smol role. Overrides the model dropdown."
+    },
+    "slow": {
+      "label": "Slow",
+      "tooltip": "Reasoning model role (omp --model slow)",
+      "description": "Runs this conversation with the model configured for omp's slow role. Overrides the model dropdown."
+    },
+    "plan": {
+      "label": "Plan",
+      "tooltip": "Planning model role (omp --model plan)",
+      "description": "Runs this conversation with the model configured for omp's plan role. Overrides the model dropdown."
     }
   },
   "providers": {
@@ -2037,11 +2182,18 @@
     "pi": {
       "label": "PI CLI"
     },
+    "omp": {
+      "label": "OMP CLI"
+    },
     "beta": {
       "badge": "Beta",
       "title": "Beta Feature",
       "message": "This feature is still in Beta. If you encounter any bugs, please report them to the author promptly."
-    }
+    },
+    "dsh": {
+      "label": "DeepSeek Harness"
+    },
+    "manageCli": "CLI Settings"
   },
   "promptEnhancer": {
     "title": "Prompt Enhancer",
@@ -2237,6 +2389,15 @@
       "label": "Fast",
       "description": "Codex fast response mode (uses additional credits)"
     }
+  },
+  "dshPresets": {
+    "title": "Select DeepSeek Harness agent preset",
+    "none": { "label": "Default", "description": "dsh default headless composition (full toolset)" },
+    "standard": { "label": "Standard", "description": "Full coding agent with the standard toolset" },
+    "code": { "label": "PTC", "description": "Standard capabilities with Code Mode" },
+    "minimal": { "label": "Minimal", "description": "Bash and str_replace_editor only" },
+    "cordis": { "label": "Creator", "description": "Standard capabilities plus composition authoring" },
+    "user": { "description": "Custom preset installed under the DSH home" }
   },
   "error": {
     "providerNotConfigured": "Provider Not Configured",

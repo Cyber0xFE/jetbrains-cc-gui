@@ -5,6 +5,8 @@ import com.github.claudecodegui.bridge.EnvironmentConfigurator;
 import com.github.claudecodegui.bridge.NodeDetector;
 import com.github.claudecodegui.handler.core.BaseMessageHandler;
 import com.github.claudecodegui.handler.core.HandlerContext;
+import com.github.claudecodegui.provider.dsh.DshEnvSupport;
+import com.github.claudecodegui.settings.CodemossSettingsService;
 import com.github.claudecodegui.startup.BridgePreloader;
 import com.google.gson.Gson;
 import com.google.gson.JsonObject;
@@ -19,6 +21,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 
@@ -40,6 +43,10 @@ public class CliModelsHandler extends BaseMessageHandler {
             "get_cli_models",
     };
 
+    private static final Set<String> SUPPORTED_PROVIDERS = Set.of(
+            "opencode", "kimi", "pi", "omp", "codex", "grok", "dsh"
+    );
+
     private final Gson gson = new Gson();
     private final NodeDetector nodeDetector = NodeDetector.getInstance();
     private final EnvironmentConfigurator envConfigurator = new EnvironmentConfigurator();
@@ -59,7 +66,7 @@ public class CliModelsHandler extends BaseMessageHandler {
             return false;
         }
         String provider = content != null ? content.trim().toLowerCase(Locale.ROOT) : "";
-        if (!"opencode".equals(provider) && !"kimi".equals(provider) && !"pi".equals(provider) && !"codex".equals(provider) && !"grok".equals(provider)) {
+        if (!SUPPORTED_PROVIDERS.contains(provider)) {
             pushError(provider, "Unsupported CLI provider for model list: " + provider);
             return true;
         }
@@ -93,6 +100,11 @@ public class CliModelsHandler extends BaseMessageHandler {
             pb.redirectErrorStream(true);
             Map<String, String> env = pb.environment();
             envConfigurator.updateProcessEnvironment(pb, node);
+            if ("dsh".equals(provider)) {
+                // DSH model catalog comes from the live host — honor the
+                // configured origin so the picker reflects the actual server.
+                DshEnvSupport.inject(env, new CodemossSettingsService());
+            }
 
             LOG.info("[CliModels] Listing models for " + provider + ": " + String.join(" ", command));
 
@@ -130,6 +142,10 @@ public class CliModelsHandler extends BaseMessageHandler {
             if (payload == null) {
                 pushError(provider, "No model list JSON in " + provider + " listModels output");
                 return;
+            }
+            if (payload.has("debug") && payload.get("debug").isJsonObject()) {
+                // Bridge-side diagnostics (e.g. empty model parse, fallback source)
+                LOG.warn("[CliModels] " + provider + " listModels debug: " + payload.get("debug"));
             }
             if (!payload.has("provider") || payload.get("provider").isJsonNull()) {
                 payload.addProperty("provider", provider);

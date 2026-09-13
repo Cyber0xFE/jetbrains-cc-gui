@@ -86,8 +86,7 @@
     "retrySdkStatus": "再試行",
     "openSourceBanner": "このプロジェクトは100%オープンソースかつ無料を保証します（海賊版プロジェクトにご注意ください）",
     "openSourceBannerStar": "Star",
-    "openSourceBannerStarToast": "リポジトリのURLをクリップボードにコピーしました。ブラウザに貼り付けてアクセスできます ⭐",
-    "openSourceBannerStarAria": "リポジトリのURLをコピーして GitHub でスター",
+    "openSourceBannerStarAria": "GitHub でリポジトリを開いてスター",
     "goInstallSdk": "インストールへ",
     "commandNotImplemented": "`{{command}}` 機能はまだ実装されていません。",
     "clearCommandDescription": "会話履歴をクリアして新しいセッションを開始",
@@ -237,7 +236,8 @@
           "grok": "Grok CLI",
           "kimi": "Kimi CLI",
           "opencode": "OpenCode",
-          "pi": "PI CLI"
+          "pi": "PI CLI",
+          "omp": "OMP CLI"
         },
         "currentProviderAuto": "Currently using automatic selection: {{provider}}",
         "currentProviderManual": "Currently using manually selected provider: {{provider}}",
@@ -519,11 +519,18 @@
     "communityDesc": "下のQRコードをスキャンして、公式WeChatグループに参加し、最新ニュースと技術サポートを入手",
     "communityQrTip": "WeChatでスキャンしてコミュニティに参加",
     "communityQrAlt": "公式WeChatコミュニティQRコード",
-    "githubTitle": "GitHub リポジトリ",
-    "githubDesc": "このプロジェクトは GitHub でオープンソースです。Star で応援してください！",
-    "githubCopyBtn": "リポジトリURLをコピー",
-    "githubCopied": "リポジトリURLがクリップボードにコピーされました。ブラウザでアクセスしてください。",
-    "githubCopyFailed": "コピーに失敗しました。手動でコピーしてください。",
+    "socialDocs": "公式ドキュメント",
+    "socialTitle": "フォローする",
+    "socialGithub": "GitHub リポジトリ — Star をお願いします！",
+    "socialX": "X（Twitter）@ZPeng31310",
+    "socialZhihu": "Zhihu @vscodeai",
+    "socialXiaohongshu": "Xiaohongshu（RED）",
+    "socialDouyin": "Douyin — ホバーしてスキャン",
+    "socialYoutube": "YouTube チャンネル",
+    "douyinQrAlt": "Douyin QRコード",
+    "douyinId": "Douyin ID: nengyongai",
+    "douyinCopied": "Douyin ID をクリップボードにコピーしました",
+    "douyinCopyFailed": "コピーに失敗しました。手動でコピーしてください。",
     "sponsor": "Sponsor",
     "sponsorDesc": "If this project helps you, consider sponsoring to support ongoing maintenance!",
     "alipay": "Alipay",
@@ -862,6 +869,10 @@
         "pi": {
           "name": "PI CLI",
           "description": "マルチプロバイダーのモデルに対応したミニマルなターミナルコーディングエージェント"
+        },
+        "omp": {
+          "name": "OMP CLI",
+          "description": "マルチプロバイダーのモデルに対応した Oh My Pi ターミナルコーディングエージェント"
         }
       },
       "installDialog": {
@@ -879,7 +890,11 @@
       "listTitle": "ローカル CLI ツール",
       "summary": "{{installed}} / {{total}} インストール済み",
       "moreComingSoon": "今後さらに対応予定",
-      "copyPath": "パスをコピー"
+      "copyPath": "パスをコピー",
+      "visibility": {
+        "hide": "プロバイダー切り替えメニューに表示しない",
+        "show": "プロバイダー切り替えメニューに表示する"
+      }
     }
   },
   "history": {
@@ -908,7 +923,7 @@
     "loading": "履歴を読み込み中...",
     "loadFailed": "読み込み失敗",
     "noSessions": "履歴セッションなし",
-    "noSessionsDesc": "現在のプロジェクトにClaudeセッション記録が見つかりません",
+    "noSessionsDesc": "現在のプロジェクトにセッション記録が見つかりません",
     "totalSessions": "{{count}}セッション · {{total}}メッセージ",
     "messageCount": "{{count}}メッセージ",
     "searchPlaceholder": "セッションタイトルを検索...",
@@ -1031,6 +1046,7 @@
   },
   "config": {
     "clickToCopy": "クリックしてコピー",
+    "officialDocs": "公式ドキュメント",
     "switch": "切り替え",
     "switchProvider": "プロバイダーを切り替え",
     "runtimeProvider": {
@@ -1388,7 +1404,9 @@
     "keepAllConfirmMessage": "現在の変更を新しい基準として保持します。今後の変更はゼロからカウントされます。",
     "discardAllSuccess": "すべての変更を元に戻しました",
     "discardAllFailed": "元に戻す失敗: {{error}}",
-    "keepAllSuccess": "すべて保持しました。変更記録をリセットしました"
+    "keepAllSuccess": "すべて保持しました。変更記録をリセットしました",
+    "multiAgentBadge": "複数エージェント",
+    "multiAgentEdited": "このセッションで {{count}} 個のエージェントがこのファイルを編集しました。ご注意ください"
   },
   "skills": {
     "title": "スキル",
@@ -1550,11 +1568,7 @@
       },
       "sonnet5": {
         "label": "Sonnet 5",
-        "description": "Sonnet 5 · Sonnet 4.6 のアップグレードモデル"
-      },
-      "sonnet47": {
-        "label": "Sonnet 4.7",
-        "description": "Sonnet 4.7 · デフォルトモデルを使用"
+        "description": "Sonnet 5 · デフォルトモデルを使用"
       },
       "opus5": {
         "label": "Opus 5",
@@ -1625,7 +1639,7 @@
   "codexModes": {
     "default": {
       "label": "Suggest (approval)",
-      "tooltip": "Codex approval_policy=untrusted – prompts before editing files or running shell commands.",
+      "tooltip": "Codex approval_policy=on-request – prompts before editing files or running shell commands.",
       "description": "Safest option. Every write or command requires your approval."
     },
     "plan": {
@@ -1644,6 +1658,28 @@
       "description": "Hands-off mode. Codex executes edits and shell commands immediately."
     }
   },
+  "ompModes": {
+    "default": {
+      "label": "デフォルト",
+      "tooltip": "選択したモデルを使用（または OMP auto）",
+      "description": "モデルドロップダウンで選択したモデルを使用します。Auto の場合は OMP CLI のデフォルトを使用します。"
+    },
+    "smol": {
+      "label": "Smol",
+      "tooltip": "高速モデルロール (omp --model smol)",
+      "description": "omp の smol ロールに設定されたモデルでこの会話を実行します。モデルドロップダウンを上書きします。"
+    },
+    "slow": {
+      "label": "Slow",
+      "tooltip": "推論モデルロール (omp --model slow)",
+      "description": "omp の slow ロールに設定されたモデルでこの会話を実行します。モデルドロップダウンを上書きします。"
+    },
+    "plan": {
+      "label": "Plan",
+      "tooltip": "プランニングモデルロール (omp --model plan)",
+      "description": "omp の plan ロールに設定されたモデルでこの会話を実行します。モデルドロップダウンを上書きします。"
+    }
+  },
   "providers": {
     "claude": {
       "label": "Claude Code"
@@ -1659,6 +1695,9 @@
     },
     "pi": {
       "label": "PI CLI"
+    },
+    "omp": {
+      "label": "OMP CLI"
     }
   },
   "promptEnhancer": {

@@ -220,6 +220,7 @@ export class GrokAcpClient {
     cwd = process.cwd(),
     onNotification,
     onServerRequest,
+    onFsWrite = null,
     onStderr,
     terminalHost = null,
   } = {}) {
@@ -227,6 +228,8 @@ export class GrokAcpClient {
     this.cwd = cwd || process.cwd();
     this.onNotification = onNotification || (() => {});
     this.onServerRequest = onServerRequest || null;
+    /** After successful ACP host fs/write_text_file — for edit-stats ledger. */
+    this.onFsWrite = typeof onFsWrite === 'function' ? onFsWrite : null;
     this.onStderr = onStderr || (() => {});
     this.terminalHost = terminalHost;
     this.proc = null;
@@ -351,7 +354,7 @@ export class GrokAcpClient {
     }
     this.pending.clear();
 
-    if (killProcess && this.proc && !this.proc.killed) {
+    if (killProcess && this.proc && this.proc.exitCode === null) {
       try {
         this.proc.kill('SIGTERM');
       } catch {
@@ -361,7 +364,7 @@ export class GrokAcpClient {
       const proc = this.proc;
       setTimeout(() => {
         try {
-          if (proc && !proc.killed) proc.kill('SIGKILL');
+          if (proc && proc.exitCode === null) proc.kill('SIGKILL');
         } catch {
           // ignore
         }
@@ -404,7 +407,7 @@ export class GrokAcpClient {
     } catch {
       // ignore
     }
-    if (this.proc && !this.proc.killed) {
+    if (this.proc && this.proc.exitCode === null) {
       try {
         this.proc.kill('SIGTERM');
       } catch {
@@ -412,7 +415,7 @@ export class GrokAcpClient {
       }
       // Force kill if still alive after a short grace period
       await new Promise((r) => setTimeout(r, 300));
-      if (this.proc && !this.proc.killed) {
+      if (this.proc && this.proc.exitCode === null) {
         try {
           this.proc.kill('SIGKILL');
         } catch {
@@ -553,6 +556,14 @@ export class GrokAcpClient {
         fs.mkdirSync(path.dirname(filePath), { recursive: true });
         fs.writeFileSync(filePath, content, 'utf8');
         this.respond(id, {});
+        try {
+          this.onFsWrite?.({
+            path: filePath,
+            content: typeof content === 'string' ? content : String(content ?? ''),
+          });
+        } catch {
+          // never fail the write because stats bookkeeping failed
+        }
       } catch (e) {
         this.respondError(id, -32000, e.message || String(e));
       }
@@ -689,6 +700,7 @@ export async function runAcpTurn({
     onStderr: (s) => {
       if (typeof onStderr === 'function') onStderr(s);
     },
+    onFsWrite: (payload) => emit('fs_write', payload),
     onNotification: (method, params) => {
       emit('notification', { method, params });
     },
@@ -700,12 +712,15 @@ export async function runAcpTurn({
         const decision = await resolveAcpPermissionDecision(params, effectiveMode, {
           autoApprove: isAutoApproveMode(effectiveMode),
         });
+        const info = extractPermissionToolInfo(params || {});
         emit('permission_decision', {
           method,
           toolName: decision.toolName,
           allowed: decision.allowed,
           optionId: decision.optionId,
           source: decision.source,
+          toolCallId: info.input?._acp?.toolCallId || '',
+          input: info.input,
         });
         acp.respond(id, decision.response);
         return true;

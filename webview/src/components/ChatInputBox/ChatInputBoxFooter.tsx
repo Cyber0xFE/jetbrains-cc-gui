@@ -26,6 +26,7 @@ export function ChatInputBoxFooter({
   currentProvider,
   reasoningEffort,
   codexFastMode,
+  dshPreset,
   onSubmit,
   onStop,
   onModeSelect,
@@ -33,6 +34,7 @@ export function ChatInputBoxFooter({
   onProviderSelect,
   onReasoningChange,
   onCodexFastModeChange,
+  onDshPresetChange,
   onEnhancePrompt,
   alwaysThinkingEnabled,
   onToggleThinking,
@@ -43,6 +45,7 @@ export function ChatInputBoxFooter({
   onOpenAgentSettings,
   onAddModel,
   onClearAgent,
+  onOpenCliSettings,
   longContextEnabled = true,
   onLongContextChange,
   fileCompletion,
@@ -63,6 +66,7 @@ export function ChatInputBoxFooter({
   currentProvider: string;
   reasoningEffort: ReasoningEffort;
   codexFastMode?: CodexFastMode;
+  dshPreset?: string;
   onSubmit: () => void;
   onStop?: () => void;
   onModeSelect?: (mode: PermissionMode) => void;
@@ -70,6 +74,7 @@ export function ChatInputBoxFooter({
   onProviderSelect?: (providerId: string) => void;
   onReasoningChange?: (effort: ReasoningEffort) => void;
   onCodexFastModeChange?: (mode: CodexFastMode) => void;
+  onDshPresetChange?: (preset: string) => void;
   onEnhancePrompt: () => void;
   alwaysThinkingEnabled?: boolean;
   onToggleThinking?: (enabled: boolean) => void;
@@ -80,6 +85,7 @@ export function ChatInputBoxFooter({
   onOpenAgentSettings?: () => void;
   onAddModel?: () => void;
   onClearAgent: () => void;
+  onOpenCliSettings?: () => void;
   longContextEnabled?: boolean;
   onLongContextChange?: (enabled: boolean) => void;
   fileCompletion: CompletionController;
@@ -118,6 +124,7 @@ export function ChatInputBoxFooter({
         currentProvider={currentProvider}
         reasoningEffort={reasoningEffort}
         codexFastMode={codexFastMode}
+        dshPreset={dshPreset}
         onSubmit={onSubmit}
         onStop={onStop}
         onModeSelect={onModeSelect}
@@ -125,6 +132,7 @@ export function ChatInputBoxFooter({
         onProviderSelect={onProviderSelect}
         onReasoningChange={onReasoningChange}
         onCodexFastModeChange={onCodexFastModeChange}
+        onDshPresetChange={onDshPresetChange}
         onEnhancePrompt={onEnhancePrompt}
         alwaysThinkingEnabled={alwaysThinkingEnabled}
         onToggleThinking={onToggleThinking}
@@ -135,6 +143,7 @@ export function ChatInputBoxFooter({
         onOpenAgentSettings={onOpenAgentSettings}
         onAddModel={onAddModel}
         onClearAgent={onClearAgent}
+        onOpenCliSettings={onOpenCliSettings}
         longContextEnabled={longContextEnabled}
         onLongContextChange={onLongContextChange}
       />

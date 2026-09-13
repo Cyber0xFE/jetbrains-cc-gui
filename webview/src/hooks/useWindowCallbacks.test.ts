@@ -113,6 +113,7 @@ describe('useWindowCallbacks integration', () => {
   beforeEach(() => {
     window.__sessionTransitioning = false;
     window.__sessionTransitionToken = null;
+    window.__deferredTransitionUpdateMessages = null;
     window.__minAcceptedUpdateSequence = 0;
     window.__prependedHistoryMessageCount = 0;
     window.__messageBaseIndex = 0;
@@ -476,24 +477,97 @@ describe('useWindowCallbacks integration', () => {
     expect(opts.applyHistoryTitleLocal).not.toHaveBeenCalled();
   });
 
-  // ===== updateMessages is blocked during transition =====
+  // ===== updateMessages is deferred during transition =====
 
-  it('updateMessages is silently dropped while __sessionTransitioning is true', () => {
+  it('updateMessages is stashed while __sessionTransitioning is true (not applied yet)', () => {
     const opts = createOptions();
     renderHook(() => useWindowCallbacks(opts));
 
     window.__sessionTransitioning = true;
 
-    const staleMessages: ClaudeMessage[] = [
-      { type: 'assistant', content: 'stale content', timestamp: new Date().toISOString() },
+    const historyMessages: ClaudeMessage[] = [
+      { type: 'assistant', content: 'history content', timestamp: new Date().toISOString() },
     ];
 
     act(() => {
-      window.updateMessages!(JSON.stringify(staleMessages));
+      window.updateMessages!(JSON.stringify(historyMessages));
     });
 
-    // setMessages should NOT be called because guard is active
+    // Not applied while the guard is active
     expect(opts.setMessages).not.toHaveBeenCalled();
+    expect(window.__deferredTransitionUpdateMessages?.json).toContain('history content');
+  });
+
+  it('historyLoadComplete flushes stashed updateMessages after releasing the guard', () => {
+    const opts = createOptions();
+    renderHook(() => useWindowCallbacks(opts));
+
+    window.__sessionTransitioning = true;
+    const historyMessages: ClaudeMessage[] = [
+      { type: 'user', content: '从历史恢复', timestamp: new Date().toISOString() },
+      { type: 'assistant', content: 'ok', timestamp: new Date().toISOString() },
+    ];
+
+    act(() => {
+      window.updateMessages!(JSON.stringify(historyMessages), 5);
+    });
+    expect(opts.setMessages).not.toHaveBeenCalled();
+
+    act(() => {
+      window.historyLoadComplete!();
+    });
+
+    expect(window.__sessionTransitioning).toBe(false);
+    expect(opts.setMessages).toHaveBeenCalled();
+    expect(window.__deferredTransitionUpdateMessages == null
+      || window.__deferredTransitionUpdateMessages === null).toBe(true);
+
+    // historyLoadComplete also re-scans messages (refreshLoadedHistoryMessages), so
+    // the last setMessages call may be a no-op on []. Assert some updater installs
+    // the restored transcript when given an empty previous list.
+    const applied = (opts.setMessages as ReturnType<typeof vi.fn>).mock.calls.some(([arg]) => {
+      if (typeof arg !== 'function') return false;
+      const next = (arg as (prev: ClaudeMessage[]) => ClaudeMessage[])([]);
+      return Array.isArray(next)
+        && next.length === 2
+        && next[0]?.content === '从历史恢复'
+        && next[1]?.content === 'ok';
+    });
+    expect(applied).toBe(true);
+  });
+
+  it('clearMessages does not wipe a post-barrier stashed history snapshot', () => {
+    const opts = createOptions();
+    renderHook(() => useWindowCallbacks(opts));
+
+    window.__sessionTransitioning = true;
+    // Simulate clearMessages barrier first (normal order), then history arrives with higher sequence.
+    act(() => {
+      window.clearMessages!('10');
+    });
+    const historyMessages: ClaudeMessage[] = [
+      { type: 'user', content: 'post-clear history', timestamp: new Date().toISOString() },
+    ];
+    act(() => {
+      window.updateMessages!(JSON.stringify(historyMessages), 11);
+    });
+    expect(window.__deferredTransitionUpdateMessages?.json).toContain('post-clear history');
+
+    // Reordered clear with lower/same barrier must not drop the post-barrier stash
+    act(() => {
+      window.clearMessages!('10');
+    });
+    expect(window.__deferredTransitionUpdateMessages?.json).toContain('post-clear history');
+
+    act(() => {
+      window.historyLoadComplete!();
+    });
+    const applied = (opts.setMessages as ReturnType<typeof vi.fn>).mock.calls.some(([arg]) => {
+      if (typeof arg !== 'function') return false;
+      const next = (arg as (prev: ClaudeMessage[]) => ClaudeMessage[])([]);
+      return Array.isArray(next) && next.some((m) => m.content === 'post-clear history');
+    });
+    expect(applied).toBe(true);
   });
 
   it('updateMessages works normally after guard is released', () => {
@@ -1436,7 +1510,7 @@ describe('useWindowCallbacks integration', () => {
   });
 
   it('onSubagentHistoryLoaded skips updates only when history payload is truly unchanged', () => {
-    const opts = createOptions();
+    const opts = createOptions({ currentSessionIdRef: { current: 'session-1' } });
     renderHook(() => useWindowCallbacks(opts));
 
     const firstPayload = {
@@ -1897,6 +1971,46 @@ describe('useWindowCallbacks integration', () => {
         type: 'assistant',
         __turnId: 2,
       });
+    });
+
+    it('defers delta rendering until a pending structural snapshot is processed', () => {
+      vi.useFakeTimers();
+      const rafCallbacks: FrameRequestCallback[] = [];
+      let nextRafId = 0;
+      vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => {
+        rafCallbacks.push(callback);
+        nextRafId += 1;
+        return nextRafId;
+      });
+      vi.stubGlobal('cancelAnimationFrame', vi.fn());
+
+      const opts = createOptions();
+      renderHook(() => useWindowCallbacks(opts));
+
+      act(() => {
+        window.onStreamStart!();
+        window.updateMessages!(JSON.stringify([
+          {
+            type: 'assistant',
+            content: 'snapshot',
+            raw: {
+              message: {
+                content: [{ type: 'tool_use', id: 'tool-1', name: 'Bash', input: { command: 'ls' } }],
+              },
+            },
+          },
+        ]), 1);
+        window.onContentDelta!('delta-after-snapshot');
+      });
+
+      expect(opts.streamingContentRef.current).toBe('delta-after-snapshot');
+      expect(rafCallbacks).toHaveLength(0);
+
+      act(() => {
+        vi.advanceTimersByTime(16);
+      });
+
+      expect(rafCallbacks).toHaveLength(2);
     });
 
     it('onBlockReset keeps streaming refs cumulative across turns (single assistant message)', () => {
