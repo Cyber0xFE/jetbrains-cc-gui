@@ -128,7 +128,11 @@ export interface HistorySessionSummary {
   lastTimestamp?: string;
   isFavorited?: boolean;
   favoritedAt?: number;
-  provider?: string; // 'claude' or 'codex'
+  provider?: string; // 'claude' | 'codex' | 'grok' | 'opencode' | …
+  /** Model used by this session when known (restored on open). */
+  model?: string;
+  /** Agent name when known (OpenCode / Claude). */
+  agent?: string;
   fileSize?: number;
   entrypoint?: string; // Session entrypoint: 'cli', 'sdk-cli', 'claude-vscode', etc.
 }
@@ -145,4 +149,13 @@ export interface HistoryData {
 export type { FileChangeStatus, EditOperation, FileChangeSummary } from './fileChanges';
 
 // Subagent types
-export type { SubagentStatus, SubagentInfo, SubagentHistoryResponse } from './subagent';
+export type {
+  SubagentStatus,
+  SubagentInfo,
+  SubagentHistoryResponse,
+  SubagentStatusSnapshot,
+  SubagentStatusesResponse,
+  TaskEvent,
+  TaskEventMap,
+  TaskEventStatus,
+} from './subagent';

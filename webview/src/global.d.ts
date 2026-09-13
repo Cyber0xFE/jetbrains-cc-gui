@@ -7,8 +7,15 @@ interface Window {
    */
   sendToJava?: (message: string) => void;
 
-  /** Re-rasterize the JCEF surface after its IntelliJ content tab is activated. */
+  /** Legacy windowed-JCEF repaint requested after its IntelliJ content tab is activated. */
   onTabActivated?: () => void;
+
+  /** Strict two-frame OSR damage pulse, owned by a Java frame-fence attempt token. */
+  __ccguiSurfaceDamagePhaseA?: (token: string) => boolean;
+  __ccguiSurfaceDamagePhaseB?: (token: string) => boolean;
+  __ccguiSurfaceDamageReplace?: (previousToken: string, nextToken: string) => boolean;
+  __ccguiSurfaceDamageFinish?: (token: string) => boolean;
+  __ccguiSurfaceDamageCancel?: (token: string, predecessorToken?: string) => boolean;
 
   /**
    * Get clipboard file path from Java
@@ -16,7 +23,13 @@ interface Window {
   getClipboardFilePath?: () => Promise<string>;
 
   /**
-   * Handle file path(s) dropped from Java (supports batch files)
+   * Insert structured absolute file references from Java or another IDE
+   * integration. The array form preserves spaces inside each path.
+   */
+  insertFileReferencesAtCursor?: (filePathInput: string | string[]) => void;
+
+  /**
+   * Legacy file-path callback retained for older integrations.
    */
   handleFilePathFromJava?: (filePathInput: string | string[]) => void;
 
@@ -92,6 +105,7 @@ interface Window {
    * Add single history message (used for Codex session loading)
    */
   addHistoryMessage?: (message: any) => void;
+  onSubagentHistoryChunk?: (transferId: string, chunk: string, isFinal: string | boolean) => void;
   beginCodexHistoryPage?: (json: string) => void;
   appendCodexHistoryPageBatch?: (pageId: string, json: string) => void;
   appendCodexHistoryPageChunk?: (
@@ -119,12 +133,32 @@ interface Window {
    * History load complete callback - invoked when history messages finish loading.
    * Triggers Markdown re-rendering to fix incorrect rendering on first history load.
    */
-  historyLoadComplete?: () => void;
+  historyLoadComplete?: (expectedMessageCount?: string | number) => void;
+  /** Early history completion buffered before React installs the real callback. */
+  __pendingHistoryLoadComplete?: { expectedMessageCount?: string | number };
+  /** Number of messages in the latest full backend snapshot accepted by this page. */
+  __lastAcceptedMessageCount?: number;
+  /** Restored-history snapshot size that still needs a React commit acknowledgment. */
+  __pendingHistoryRefreshMessageCount?: number;
+  /** Identifies or invalidates a commit-bound repaint when the page changes sessions first. */
+  __historySurfaceRefreshEpoch?: number;
 
   /**
    * Subagent sidechain history callback.
    */
   onSubagentHistoryLoaded?: (json: string) => void;
+
+  /** Batched lightweight Codex subagent lifecycle status callback. */
+  onSubagentStatusesLoaded?: (json: string) => void;
+
+  /**
+   * task_* SDK system event callback (async subagent lifecycle).
+   * Payload: { subtype: 'task_started'|'task_progress'|'task_notification',
+   *   task_id, tool_use_id, status?, summary?, usage?, output_file? }.
+   * task_notification carries the terminal status and result summary that the
+   * StatusPanel uses to mark a background (run_in_background) Agent subagent as completed.
+   */
+  onTaskEvent?: (eventJson: string) => void;
 
   /**
    * SDK-to-CLI session conversion result callback.
@@ -165,6 +199,9 @@ interface Window {
    */
   onUsageUpdate?: (json: string) => void;
 
+  /** Buffers the latest usage update received before React callbacks mount. */
+  __pendingUsageUpdate?: string;
+
   /**
    * Mode changed callback
    */
@@ -196,6 +233,16 @@ interface Window {
    * Show AskUserQuestion dialog
    */
   showAskUserQuestionDialog?: (json: string) => void;
+  updateCodexPets?: (json: string) => void;
+  updateCodexPetPreview?: (json: string) => void;
+  onCodexPetAssetsChanged?: () => void;
+  updateCodexPetConfig?: (json: string) => void;
+  updatePetdexCatalog?: (json: string) => void;
+  updatePetdexPreview?: (json: string) => void;
+  onCodexPetOperation?: (json: string) => void;
+  updateHatchPetStatus?: (json: string) => void;
+  updateHatchPetReference?: (json: string) => void;
+  onHatchPetCommandPrepared?: (json: string) => void;
 
   /**
    * Show PlanApproval dialog
@@ -242,6 +289,11 @@ interface Window {
   insertCodeSnippetAtCursor?: (selectionInfo: string) => void;
 
   /**
+   * Insert an inline quote chip. Payload: JSON { text } - registered by ChatInputBox
+   */
+  addQuotedSnippet?: (payload: string) => void;
+
+  /**
    * Focus the chat input box - registered by ChatInputBox
    */
   focusChatInput?: () => void;
@@ -285,6 +337,9 @@ interface Window {
    * Update MCP server tools list
    */
   updateMcpServerTools?: (json: string) => void;
+
+  /** Update Codex MCP server tools list. */
+  updateCodexMcpServerTools?: (json: string) => void;
 
   mcpServerToggled?: (json: string) => void;
 
@@ -391,6 +446,16 @@ interface Window {
   updateAskUserQuestionNotificationEnabled?: (json: string) => void;
 
   /**
+   * Update visual system notification focus gate state
+   */
+  updateSystemNotificationOnlyWhenUnfocused?: (json: string) => void;
+
+  /**
+   * Update AskUserQuestion reminder sound notification enabled state
+   */
+  updateAskUserQuestionSoundNotificationEnabled?: (json: string) => void;
+
+  /**
    * Update permission dialog timeout setting
    */
   updatePermissionDialogTimeout?: (json: string) => void;
@@ -466,14 +531,9 @@ interface Window {
   skillToggleResult?: (json: string) => void;
 
   /**
-   * Update usage statistics
+   * TokenTracker bridge response callback (correlated by requestId)
    */
-  updateUsageStatistics?: (json: string) => void;
-
-  /**
-   * Pending usage statistics before component mounts
-   */
-  __pendingUsageStatistics?: string;
+  onTokenTrackerResponse?: (json: string) => void;
 
   /**
    * Update slash commands list (from SDK)
@@ -726,9 +786,10 @@ interface Window {
   onThinkingDelta?: (delta: string) => void;
 
   /**
-   * Block reset callback - called when a new assistant message starts within
-   * an ongoing stream (e.g., after a tool_use loop iteration). Frontend should
-   * clear streaming content refs to prevent cross-turn content merging.
+   * Block reset callback - fired when a new assistant content block starts
+   * within an ongoing stream (e.g., after a tool_use loop iteration). Only
+   * render bookkeeping resets here; content buffers stay cumulative so the
+   * backend snapshot's per-block routing remains consistent.
    */
   onBlockReset?: () => void;
 
@@ -768,6 +829,19 @@ interface Window {
    * is the actual guard.
    */
   __sessionTransitionToken?: string | null;
+
+  /**
+   * Latest history/session snapshot received while `__sessionTransitioning` was true.
+   * Applied when the transition ends (historyLoadComplete / setSessionId) so Grok (and
+   * other providers) do not lose the transcript if updateMessages races the guard.
+   */
+  __deferredTransitionUpdateMessages?: { json: string; sequence: number | null } | null;
+
+  /** Stash an updateMessages payload for post-transition flush. */
+  __stashDeferredTransitionUpdateMessages?: (json: string, sequence?: number | null) => void;
+
+  /** Apply and clear `__deferredTransitionUpdateMessages` after the guard is released. */
+  __flushDeferredTransitionUpdateMessages?: () => void;
 
   /**
    * Resets all transient UI state (loading, streaming, toasts, refs) in one shot.
@@ -821,18 +895,23 @@ interface Window {
   __stallWatchdogInterval?: ReturnType<typeof setInterval> | null;
 
   /**
-   * Pending rAF handle and JSON for deferred updateMessages processing.
-   * Stored on window so re-registration of message callbacks cancels stale rAFs.
+   * Pending timer handle and JSON for deferred updateMessages processing during
+   * streaming (historical "rAF" naming). Stored on window so re-registration of
+   * message callbacks cancels stale timers.
    */
   __pendingUpdateRaf?: number | null;
   __pendingUpdateJson?: string | null;
   __pendingUpdateSequence?: number | null;
+  /** Deltas arrived while a structural snapshot was pending; rendering resumes after it applies. */
+  __streamingDeltaRenderDeferred?: boolean;
+  /** Re-schedule deferred delta rendering once the pending snapshot has been applied. */
+  __flushDeferredStreamingRenders?: () => void;
   __minAcceptedUpdateSequence?: number;
   /** Number of paged history messages prepended ahead of the backend session snapshot. */
   __prependedHistoryMessageCount?: number;
   /** Backend index represented by the first non-prepended message; zero means its full prefix is present. */
   __messageBaseIndex?: number;
-  /** Cancel pending rAF-deferred updateMessages (set by messageCallbacks, called by onStreamEnd). */
+  /** Cancel the pending deferred updateMessages (set by messageCallbacks, called by stream lifecycle guards). */
   __cancelPendingUpdateMessages?: () => void;
 
   /**
@@ -874,6 +953,12 @@ interface Window {
    * Update dependency status callback
    */
   updateDependencyStatus?: (json: string) => void;
+
+  /**
+   * CLI tools install/version detection result (Settings → CLI tab).
+   * Payload is a map of tool id → { id, name, binaryName, installed, version?, path?, error? }.
+   */
+  updateCliStatus?: (json: string) => void;
 
   /**
    * Dependency install progress callback
@@ -929,6 +1014,8 @@ interface Window {
    * Pending dependency status payload before React initialization
    */
   __pendingDependencyStatus?: string;
+  __dependencyStatusState?: 'pending' | 'ready' | 'error';
+  __ccgOnBridgeReady?: () => void;
 
   /**
    * Pending streaming enabled status before React initialization
@@ -1021,6 +1108,30 @@ interface Window {
    */
   __INITIAL_TAB_MODEL__?: string;
 
+  /** User-installed DSH agent preset ids discovered from the DSH home. */
+  __INITIAL_DSH_PRESETS__?: string[];
+
+  /** Runtime page generation established by Java before exposing the bridge. */
+  __CCG_PAGE_GENERATION__?: number;
+
+  /** Identifies initial load, startup retry, or runtime recovery for this page. */
+  __CCGUI_PAGE_LOAD_KIND__?: 'initial_load' | 'startup_retry' | 'runtime_recovery';
+
+  /** True after Java has installed the runtime generation and load context. */
+  __CCGUI_PAGE_CONTEXT_READY__?: boolean;
+
+  /** True for a native watchdog reload that reuses the tab's original HTML. */
+  __CCGUI_RECOVERY_RELOAD__?: boolean;
+
+  /** True after React applies Java's authoritative recovery provider/model state. */
+  __CCGUI_RECOVERY_STATE_APPLIED__?: boolean;
+
+  /** Applies the current Java session configuration without echoing bridge commands. */
+  applyBackendTabState?: (json: string) => void;
+
+  /** Buffers backend tab state when Java responds before React callbacks mount. */
+  __pendingBackendTabState?: string;
+
   // ============================================================================
   // Provider settings panel callbacks (registered by ProviderList)
   // ============================================================================
@@ -1038,9 +1149,74 @@ interface Window {
   import_preview_result?: (dataOrStr: string | { providers?: unknown }) => void;
 
   /**
+   * Codex cc-switch import preview result callback. Mirrors import_preview_result
+   * but is Codex-scoped so the Codex panel (mounted alongside the Claude panel)
+   * owns its own import channel without colliding with the Claude flow.
+   */
+  codex_import_preview_result?: (dataOrStr: string | { providers?: unknown }) => void;
+
+  /**
+   * Codex cc-switch import notification callback (type, title, message),
+   * used for success/error/info toasts during Codex import. Codex-scoped to
+   * avoid double toasts from the shared backend_notification channel.
+   */
+  codex_cc_switch_notification?: (...args: unknown[]) => void;
+
+  /**
    * Backend notification callback (variadic for backward compatibility).
    * Modern callers pass (type, title, message); legacy callers pass a single
    * JSON string or object with shape { type, title, message }.
    */
   backend_notification?: (...args: unknown[]) => void;
+
+  /**
+   * CLI provider model catalog (Kimi / OpenCode). Java pushes JSON after
+   * `get_cli_models:<provider>` via channel-manager `listModels`.
+   */
+  setCliModels?: (
+    dataOrStr:
+      | string
+      | {
+          success?: boolean;
+          provider?: string;
+          models?: Array<{ id?: string; label?: string; description?: string }>;
+          /** Dynamic model roles (omp); description = resolved model selector. */
+          roles?: Array<{ id?: string; label?: string; description?: string }>;
+          error?: string;
+          defaultModel?: string;
+        }
+  ) => void;
+
+  /**
+   * DSH host lifecycle status. Java pushes JSON after
+   * `get_dsh_status` / `start_dsh_host` / `stop_dsh_host` /
+   * `save_dsh_settings:<json>` via channel-manager `dsh status|ensureHost|stopHost`.
+   */
+  updateDshStatus?: (
+    dataOrStr:
+      | string
+      | {
+          success?: boolean;
+          provider?: string;
+          installed?: boolean;
+          version?: string;
+          bin?: string;
+          origin?: string;
+          hostRunning?: boolean;
+          ownership?: 'spawned' | 'adopted';
+          error?: string;
+          describe?: {
+            version?: string;
+            provider?: string;
+            model?: string;
+            attachedSessions?: number;
+          };
+          settings?: {
+            bin?: string;
+            host?: string;
+            port?: number;
+            autoStart?: boolean;
+          };
+        }
+  ) => void;
 }

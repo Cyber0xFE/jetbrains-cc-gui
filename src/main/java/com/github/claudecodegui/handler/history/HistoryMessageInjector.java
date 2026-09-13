@@ -2,6 +2,8 @@ package com.github.claudecodegui.handler.history;
 
 import com.github.claudecodegui.bridge.NodeDetector;
 import com.github.claudecodegui.handler.CodexMessageConverter;
+import com.github.claudecodegui.handler.SettingsHandler;
+import com.github.claudecodegui.handler.UsagePushService;
 import com.github.claudecodegui.handler.core.HandlerContext;
 import com.github.claudecodegui.provider.codex.CodexHistoryReader;
 import com.github.claudecodegui.session.ClaudeSession;
@@ -17,11 +19,17 @@ import com.intellij.openapi.diagnostic.Logger;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Instant;
+import java.time.format.DateTimeParseException;
 import java.util.ArrayDeque;
-import java.util.Base64;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.Deque;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicLong;
@@ -57,6 +65,7 @@ public class HistoryMessageInjector {
         sessionLoadGeneration.incrementAndGet();
         String provider = currentProvider;
         String resolvedSessionId = sessionId;
+        String model = null;
 
         try {
             JsonObject payload = new Gson().fromJson(sessionId, JsonObject.class);
@@ -66,6 +75,12 @@ public class HistoryMessageInjector {
                 }
                 if (payload.has("provider") && !payload.get("provider").isJsonNull()) {
                     provider = payload.get("provider").getAsString();
+                }
+                if (payload.has("model") && !payload.get("model").isJsonNull()) {
+                    String m = payload.get("model").getAsString();
+                    if (m != null && !m.trim().isEmpty()) {
+                        model = m.trim();
+                    }
                 }
             }
         } catch (Exception ignored) {
@@ -81,15 +96,16 @@ public class HistoryMessageInjector {
             return;
         }
         LOG.info("[HistoryHandler] Loading history session: " + resolvedSessionId
-                + " from project: " + projectPath + ", provider: " + provider);
+                + " from project: " + projectPath + ", provider: " + provider
+                + (model != null ? ", model: " + model : ""));
 
         if ("codex".equals(provider)) {
             // Codex session: read session info and restore session state
-            loadCodexSession(resolvedSessionId);
+            loadCodexSession(resolvedSessionId, model);
         } else {
-            // Claude session: use existing callback mechanism
+            // Claude / CLI providers: use existing callback mechanism
             if (sessionLoadCallback != null) {
-                sessionLoadCallback.onLoadSession(resolvedSessionId, projectPath, provider);
+                sessionLoadCallback.onLoadSession(resolvedSessionId, projectPath, provider, model);
             } else {
                 LOG.warn("[HistoryHandler] WARNING: No session load callback set");
                 notifyHistoryLoadComplete();
@@ -102,6 +118,10 @@ public class HistoryMessageInjector {
      * Reads session messages directly and injects them into the frontend, while restoring session state.
      */
     void loadCodexSession(String sessionId) {
+        loadCodexSession(sessionId, null);
+    }
+
+    void loadCodexSession(String sessionId, String model) {
         long generation = sessionLoadGeneration.incrementAndGet();
         CompletableFuture.runAsync(() -> {
             LOG.info("[HistoryHandler] ========== 开始加载 Codex 会话 ==========");
@@ -119,7 +139,11 @@ public class HistoryMessageInjector {
                 String cwd = page.cwd;
 
                 context.getSession().setSessionInfo(threadIdToUse, cwd);
+                if (model != null && !model.isBlank()) {
+                    context.getSession().setModel(model.trim());
+                }
                 restoreCodexFrontendMessagesToSessionState(context.getSession().getState(), page.messages);
+                pushRestoredCodexUsage();
                 LOG.info("[HistoryHandler] 恢复 Codex 会话状态: threadId=" + threadIdToUse + " (from sessionId=" + sessionId + "), cwd=" + cwd);
 
                 injectCodexHistoryPage(sessionId, page, true);
@@ -140,7 +164,7 @@ public class HistoryMessageInjector {
                     String jsCode = "if (window.addErrorMessage) { " +
                                             "  window.addErrorMessage('加载 Codex 会话失败: " + errorMsg + "'); " +
                                             "}";
-                    context.executeJavaScriptOnEDT(jsCode);
+                    context.executeJavaScriptQueued(jsCode);
                 });
                 notifyHistoryLoadComplete();
             }
@@ -176,6 +200,7 @@ public class HistoryMessageInjector {
                 boolean replace = page.cursorReset;
                 if (replace) {
                     restoreCodexFrontendMessagesToSessionState(context.getSession().getState(), page.messages);
+                    pushRestoredCodexUsage();
                 }
                 injectCodexHistoryPage(sessionId, page, replace);
                 notifyCodexHistoryPageRenderComplete();
@@ -188,6 +213,16 @@ public class HistoryMessageInjector {
 
     private void notifyCodexHistoryPageRenderComplete() {
         context.callJavaScript("codexHistoryPageRenderComplete");
+    }
+
+    private void pushRestoredCodexUsage() {
+        ClaudeSession session = context.getSession();
+        if (session == null) {
+            return;
+        }
+        int fallbackMaxTokens = SettingsHandler.getModelContextLimit(
+                session.getProvider(), session.getModel());
+        new UsagePushService(context).pushCurrentUsageIfAvailable(fallbackMaxTokens);
     }
 
     static CodexHistoryPage scanCodexHistoryPage(CodexHistoryReader reader,
@@ -354,7 +389,7 @@ public class HistoryMessageInjector {
                                     "    console.error('[HistoryHandler] historyLoadComplete callback failed:', e); " +
                                     "  } " +
                                     "}";
-            context.executeJavaScriptOnEDT(jsCode);
+            context.executeJavaScriptQueued(jsCode);
         });
     }
 
@@ -364,23 +399,202 @@ public class HistoryMessageInjector {
      */
     public static List<JsonObject> convertCodexMessagesToFrontendBatch(JsonArray messages) {
         List<JsonObject> frontendMessages = new ArrayList<>();
+        Set<String> internalToolCallIds = new HashSet<>();
+        Map<String, CodexExecHistoryReplay.Output> outputsByCallId = new HashMap<>();
+
+        for (JsonElement element : messages) {
+            if (!element.isJsonObject()) {
+                continue;
+            }
+            JsonObject message = element.getAsJsonObject();
+            JsonObject payload = getResponseItemPayload(message);
+            if (isInternalHistoryToolCall(payload)) {
+                String callId = getStringProperty(payload, "call_id");
+                if (callId != null && !callId.isBlank()) {
+                    internalToolCallIds.add(callId);
+                }
+            } else if (isToolOutputPayload(payload)) {
+                String callId = getStringProperty(payload, "call_id");
+                if (callId != null && !callId.isBlank()) {
+                    outputsByCallId.put(
+                        callId,
+                        new CodexExecHistoryReplay.Output(
+                            payload,
+                            getStringProperty(message, "timestamp")
+                        )
+                    );
+                }
+            }
+        }
+
         CodexFrontendMessageAccumulator accumulator = new CodexFrontendMessageAccumulator(frontendMessages::add);
         for (int i = 0; i < messages.size(); i++) {
-            accumulator.accept(messages.get(i).getAsJsonObject());
+            JsonElement element = messages.get(i);
+            if (!element.isJsonObject()) {
+                continue;
+            }
+            JsonObject msg = element.getAsJsonObject();
+            JsonObject payload = getResponseItemPayload(msg);
+
+            if (isInternalHistoryToolCall(payload)) {
+                if (CodexExecHistoryReplay.isExecCall(payload)) {
+                    String callId = getStringProperty(payload, "call_id");
+                    String timestamp = getStringProperty(msg, "timestamp");
+                    CodexExecHistoryReplay.Output output =
+                        callId != null ? outputsByCallId.get(callId) : null;
+                    JsonObject planInput = CodexExecHistoryReplay.extractUpdatePlanInput(payload);
+                    if (planInput != null) {
+                        accumulator.acceptConverted(
+                            CodexExecHistoryReplay.createPlanToolUseMessage(callId, planInput, timestamp)
+                        );
+                        if (output != null) {
+                            accumulator.acceptConverted(
+                                CodexExecHistoryReplay.createPlanToolResultMessage(
+                                    callId,
+                                    output,
+                                    timestamp
+                                )
+                            );
+                        }
+                    }
+                    List<CodexExecHistoryReplay.Command> commands =
+                        CodexExecHistoryReplay.extractCommands(payload);
+                    if (!commands.isEmpty()) {
+                        accumulator.acceptConverted(
+                            CodexExecHistoryReplay.createToolUseMessage(callId, commands, timestamp)
+                        );
+                        if (output != null) {
+                            accumulator.acceptConverted(
+                                CodexExecHistoryReplay.createToolResultMessage(
+                                    callId,
+                                    commands,
+                                    output,
+                                    timestamp
+                                )
+                            );
+                        }
+                    }
+                }
+                continue;
+            }
+            if (isOutputForInternalHistoryTool(payload, internalToolCallIds)) {
+                continue;
+            }
+
+            accumulator.accept(msg);
         }
         accumulator.finish();
         return frontendMessages;
     }
 
+    /**
+     * Extracts a provider-reported Codex context snapshot from a JSONL token_count record.
+     * Only last_token_usage represents the active model context. Session-cumulative
+     * total_token_usage is deliberately ignored because it may exceed the model window.
+     */
+    private static JsonObject extractCodexTokenCountUsage(JsonObject message) {
+        if (message == null
+                || !"event_msg".equals(getStringProperty(message, "type"))
+                || !message.has("payload")
+                || !message.get("payload").isJsonObject()) {
+            return null;
+        }
+        JsonObject payload = message.getAsJsonObject("payload");
+        if (!"token_count".equals(getStringProperty(payload, "type"))
+                || !payload.has("info")
+                || !payload.get("info").isJsonObject()) {
+            return null;
+        }
+        JsonObject info = payload.getAsJsonObject("info");
+        if (!info.has("last_token_usage") || !info.get("last_token_usage").isJsonObject()) {
+            return null;
+        }
+        JsonObject contextUsage = info.getAsJsonObject("last_token_usage");
+
+        JsonObject usage = new JsonObject();
+        usage.addProperty("input_tokens", getIntProperty(contextUsage, "input_tokens"));
+        usage.addProperty("output_tokens", getIntProperty(contextUsage, "output_tokens"));
+        usage.addProperty("cache_read_input_tokens", getIntProperty(contextUsage, "cached_input_tokens"));
+        usage.addProperty("cache_creation_input_tokens", 0);
+        int contextWindow = getIntProperty(info, "model_context_window");
+        if (contextWindow > 0) {
+            usage.addProperty("model_context_window", contextWindow);
+        }
+        return usage;
+    }
+
+    private static int getIntProperty(JsonObject object, String propertyName) {
+        if (object == null || !object.has(propertyName) || object.get(propertyName).isJsonNull()) {
+            return 0;
+        }
+        try {
+            return Math.max(0, object.get(propertyName).getAsInt());
+        } catch (RuntimeException ignored) {
+            return 0;
+        }
+    }
+
+    private static boolean isInternalHistoryToolCall(JsonObject payload) {
+        String payloadType = getStringProperty(payload, "type");
+        String toolName = getStringProperty(payload, "name");
+        if (payloadType == null || toolName == null) {
+            return false;
+        }
+
+        if (!"function_call".equals(payloadType) && !"custom_tool_call".equals(payloadType)) {
+            return false;
+        }
+        return CodexMessageConverter.isHiddenHistoryToolName(toolName);
+    }
+
+    private static boolean isToolOutputPayload(JsonObject payload) {
+        String payloadType = getStringProperty(payload, "type");
+        if (payloadType == null) {
+            return false;
+        }
+        return "function_call_output".equals(payloadType) || "custom_tool_call_output".equals(payloadType);
+    }
+
+    private static boolean isOutputForInternalHistoryTool(
+            JsonObject payload,
+            Set<String> internalToolCallIds
+    ) {
+        String callId = getStringProperty(payload, "call_id");
+        if (callId == null) {
+            return false;
+        }
+
+        return isToolOutputPayload(payload)
+            && internalToolCallIds.contains(callId);
+    }
+
+    private static JsonObject getResponseItemPayload(JsonObject message) {
+        if (message == null
+                || !message.has("type")
+                || !"response_item".equals(message.get("type").getAsString())
+                || !message.has("payload")
+                || !message.get("payload").isJsonObject()) {
+            return null;
+        }
+        return message.getAsJsonObject("payload");
+    }
+
     private static final class CodexFrontendMessageAccumulator {
         private final Consumer<JsonObject> consumer;
         private JsonObject pending;
+        private JsonObject latestAssistant;
 
         private CodexFrontendMessageAccumulator(Consumer<JsonObject> consumer) {
             this.consumer = consumer;
         }
 
         private void accept(JsonObject rawMessage) {
+            JsonObject usage = extractCodexTokenCountUsage(rawMessage);
+            if (usage != null) {
+                attachUsageToLatestAssistant(usage);
+                return;
+            }
+
             JsonObject incoming = convertCodexMessageToFrontend(rawMessage);
             if (incoming == null) {
                 return;
@@ -398,6 +612,40 @@ public class HistoryMessageInjector {
 
             emitPending();
             pending = incoming;
+            rememberLatestAssistant(incoming);
+        }
+
+        /**
+         * Accepts an already-converted frontend message (e.g. replayed exec tool
+         * cards) while preserving ordering with the buffered pending message.
+         */
+        private void acceptConverted(JsonObject incoming) {
+            if (incoming == null) {
+                return;
+            }
+            emitPending();
+            pending = incoming;
+            rememberLatestAssistant(incoming);
+        }
+
+        private void rememberLatestAssistant(JsonObject incoming) {
+            if ("assistant".equals(getStringProperty(incoming, "type"))) {
+                latestAssistant = incoming;
+            }
+        }
+
+        private void attachUsageToLatestAssistant(JsonObject usage) {
+            if (latestAssistant == null || usage == null) {
+                return;
+            }
+            JsonObject raw;
+            if (latestAssistant.has("raw") && latestAssistant.get("raw").isJsonObject()) {
+                raw = latestAssistant.getAsJsonObject("raw");
+            } else {
+                raw = new JsonObject();
+                latestAssistant.add("raw", raw);
+            }
+            raw.add("usage", usage.deepCopy());
         }
 
         private void finish() {
@@ -472,7 +720,10 @@ public class HistoryMessageInjector {
     }
 
     private static String getStringProperty(JsonObject object, String propertyName) {
-        if (object == null || !object.has(propertyName) || object.get(propertyName).isJsonNull()) {
+        if (object == null
+                || !object.has(propertyName)
+                || object.get(propertyName).isJsonNull()
+                || !object.get(propertyName).isJsonPrimitive()) {
             return null;
         }
         return object.get(propertyName).getAsString();
@@ -543,7 +794,7 @@ public class HistoryMessageInjector {
     /**
      * 将前端统一消息结构恢复为会话内存消息结构。
      */
-    private static ClaudeSession.Message toSessionMessage(JsonObject frontendMsg) {
+    static ClaudeSession.Message toSessionMessage(JsonObject frontendMsg) {
         if (frontendMsg == null || !frontendMsg.has("type")) {
             return null;
         }
@@ -571,9 +822,40 @@ public class HistoryMessageInjector {
         JsonObject raw = frontendMsg.has("raw") && frontendMsg.get("raw").isJsonObject()
             ? frontendMsg.getAsJsonObject("raw")
             : null;
-        return raw != null
+        ClaudeSession.Message restored = raw != null
             ? new ClaudeSession.Message(messageType, content, raw.deepCopy())
             : new ClaudeSession.Message(messageType, content);
+        Long sourceTimestamp = parseFrontendTimestamp(frontendMsg);
+        if (sourceTimestamp != null) {
+            restored.timestamp = sourceTimestamp;
+        }
+        return restored;
+    }
+
+    private static Long parseFrontendTimestamp(JsonObject frontendMsg) {
+        if (!frontendMsg.has("timestamp") || frontendMsg.get("timestamp").isJsonNull()) {
+            return null;
+        }
+        JsonElement timestamp = frontendMsg.get("timestamp");
+        if (!timestamp.isJsonPrimitive()) {
+            return null;
+        }
+        try {
+            if (timestamp.getAsJsonPrimitive().isNumber()) {
+                return timestamp.getAsLong();
+            }
+            String value = timestamp.getAsString();
+            if (value == null || value.isBlank()) {
+                return null;
+            }
+            try {
+                return Long.parseLong(value);
+            } catch (NumberFormatException ignored) {
+                return Instant.parse(value).toEpochMilli();
+            }
+        } catch (NumberFormatException | DateTimeParseException ignored) {
+            return null;
+        }
     }
 
     /**
@@ -640,11 +922,14 @@ public class HistoryMessageInjector {
             }
         }
 
+        String rawContent = "";
         String content = "";
         if (payload.has("message") && !payload.get("message").isJsonNull()) {
-            content = CodexMessageConverter.stripSystemTags(payload.get("message").getAsString());
+            rawContent = payload.get("message").getAsString();
+            content = CodexMessageConverter.stripSystemTags(rawContent);
         }
-        if ((content == null || content.isBlank()) && !hasLocalImages) {
+        JsonArray restoredImageBlocks = CodexMessageConverter.restoreCodexImagePlaceholderBlocks(rawContent);
+        if ((content == null || content.isBlank()) && !hasLocalImages && restoredImageBlocks.size() == 0) {
             return null;
         }
         if (content == null) {
@@ -657,7 +942,7 @@ public class HistoryMessageInjector {
 
         // Build raw structure compatible with MessageParser
         JsonObject rawObj = new JsonObject();
-        JsonArray contentBlocks = buildUserMessageContentBlocks(payload, content);
+        JsonArray contentBlocks = buildUserMessageContentBlocks(payload, restoredImageBlocks, content);
         rawObj.add("content", contentBlocks);
         rawObj.addProperty("role", "user");
         frontendMsg.add("raw", rawObj);
@@ -669,8 +954,8 @@ public class HistoryMessageInjector {
         return frontendMsg;
     }
 
-    private static JsonArray buildUserMessageContentBlocks(JsonObject payload, String content) {
-        JsonArray contentBlocks = new JsonArray();
+    private static JsonArray buildUserMessageContentBlocks(JsonObject payload, JsonArray restoredImageBlocks, String content) {
+        JsonArray contentBlocks = CodexMessageConverter.userContentBlocks(restoredImageBlocks, null);
         appendLocalImageBlocks(payload, contentBlocks);
 
         if (content != null && !content.isBlank()) {
@@ -775,7 +1060,7 @@ public class HistoryMessageInjector {
 
         if (replace) {
             // Keep the session-transition barrier active until historyLoadComplete.
-            context.executeJavaScriptOnEDT("if (window.clearMessages) { window.clearMessages(); }");
+            context.executeJavaScriptQueued("if (window.clearMessages) { window.clearMessages(); }");
         }
         context.callJavaScript("beginCodexHistoryPage", context.escapeJs(gson.toJson(startInfo)));
 

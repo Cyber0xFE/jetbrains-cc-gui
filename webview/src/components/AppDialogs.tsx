@@ -42,6 +42,7 @@ const AddModelDialogWrapper = ({
       models={models}
       onModelsChange={updateModels}
       onClose={onClose}
+      contextWindowEnabled={currentProvider === 'codex'}
       initialAddMode
     />
   );

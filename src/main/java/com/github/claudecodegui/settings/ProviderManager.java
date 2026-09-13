@@ -461,14 +461,29 @@ public class ProviderManager {
 
     /**
      * Apply the active provider to Claude settings.json.
+     * <p>
+     * Uses {@link ClaudeSettingsSyncPlan} (same rules as vscode-cc-gui): skips
+     * local/CLI-login/null providers and empty env payloads so incomplete state
+     * cannot wipe credentials.
      */
+    /**
+     * Provider modes that must never write to the global ~/.claude/settings.json:
+     * local settings (the user hand-manages the file), CLI login (the SDK owns
+     * auth via native OAuth), and the disabled pseudo-provider.
+     */
+    private static boolean isGlobalSettingsSyncExempt(String currentId) {
+        return LOCAL_SETTINGS_PROVIDER_ID.equals(currentId)
+                || CLI_LOGIN_PROVIDER_ID.equals(currentId)
+                || DISABLED_PROVIDER_ID.equals(currentId);
+    }
+
     public void applyActiveProviderToClaudeSettings() throws IOException {
         JsonObject config = configReader.apply(null);
 
         if (config.has("claude") &&
                 config.getAsJsonObject("claude").has("current")) {
             String currentId = config.getAsJsonObject("claude").get("current").getAsString();
-            if (LOCAL_SETTINGS_PROVIDER_ID.equals(currentId) || CLI_LOGIN_PROVIDER_ID.equals(currentId)) {
+            if (isGlobalSettingsSyncExempt(currentId)) {
                 LOG.info("[ProviderManager] " + currentId + " provider active, skipping sync to settings.json");
                 return;
             }
@@ -483,6 +498,61 @@ public class ProviderManager {
     }
 
     /**
+     * Startup-time "fill in the blanks" sync: repair only the provider-managed
+     * fields that are missing from {@code ~/.claude/settings.json}, never
+     * overwriting values the user already has there.
+     *
+     * <p>Used by {@code ChatWindowDelegate.syncActiveProvider()} on every chat
+     * window open, as opposed to {@link #applyActiveProviderToClaudeSettings()}
+     * which is reserved for explicit user actions (switch / edit provider).
+     *
+     * <p>Returns false (no-op) for local settings / CLI login / disabled
+     * providers — those modes do not own the global config, so we must not
+     * touch it. Also returns false when the active provider carries an empty
+     * {@code settingsConfig.env} payload: per {@link ClaudeSettingsSyncPlan}
+     * that is incomplete state (e.g. a failed cc-switch read) and must not
+     * touch settings.json — not even additively.
+     */
+    public boolean repairActiveProviderToClaudeSettings() throws IOException {
+        JsonObject config = configReader.apply(null);
+
+        if (config.has("claude") &&
+                config.getAsJsonObject("claude").has("current")) {
+            String currentId = config.getAsJsonObject("claude").get("current").getAsString();
+            if (isGlobalSettingsSyncExempt(currentId)) {
+                LOG.info("[ProviderManager] " + currentId + " provider active, skipping repair");
+                return false;
+            }
+        }
+
+        JsonObject activeProvider = getActiveClaudeProvider();
+        if (activeProvider == null) {
+            LOG.info("[ProviderManager] No active provider to repair in .claude/settings.json");
+            return false;
+        }
+        if (!hasEnvPayload(activeProvider)) {
+            LOG.info("[ProviderManager] Active provider has empty env payload, skipping repair");
+            return false;
+        }
+        return claudeSettingsManager.repairMissingProviderFields(activeProvider);
+    }
+
+    /**
+     * Mirror of {@link ClaudeSettingsSyncPlan}'s empty-env rule: true only when
+     * the provider carries a non-empty {@code settingsConfig.env} object.
+     */
+    private static boolean hasEnvPayload(JsonObject provider) {
+        if (!provider.has("settingsConfig") || !provider.get("settingsConfig").isJsonObject()) {
+            return false;
+        }
+        JsonObject settingsConfig = provider.getAsJsonObject("settingsConfig");
+        if (!settingsConfig.has("env") || !settingsConfig.get("env").isJsonObject()) {
+            return false;
+        }
+        return settingsConfig.getAsJsonObject("env").size() > 0;
+    }
+
+    /**
      * Parse provider configurations from cc-switch.db.
      * Uses a Node.js script to read the database (cross-platform compatible, avoids JDBC classloader issues).
      *
@@ -490,9 +560,24 @@ public class ProviderManager {
      * @return the list of parsed providers
      */
     public List<JsonObject> parseProvidersFromCcSwitchDb(String dbPath) throws IOException {
-        List<JsonObject> result = new ArrayList<>();
+        return parseProvidersFromCcSwitchDb(dbPath, "claude");
+    }
 
-        LOG.info("[ProviderManager] Reading cc-switch database via Node.js: " + dbPath);
+    /**
+     * Parse provider configurations from cc-switch.db for the given app type.
+     * Uses a Node.js script to read the database (cross-platform compatible, avoids JDBC classloader issues).
+     *
+     * @param dbPath  the database file path
+     * @param appType the cc-switch app_type to filter ("claude" or "codex")
+     * @return the list of parsed providers
+     */
+    public List<JsonObject> parseProvidersFromCcSwitchDb(String dbPath, String appType) throws IOException {
+        List<JsonObject> result = new ArrayList<>();
+        if (appType == null || appType.trim().isEmpty()) {
+            appType = "claude";
+        }
+
+        LOG.info("[ProviderManager] Reading cc-switch database via Node.js (app_type=" + appType + "): " + dbPath);
 
         // Get the ai-bridge directory path (handles extraction automatically)
         String aiBridgePath = getAiBridgePath();
@@ -542,6 +627,7 @@ public class ProviderManager {
             // Build the Node.js command (WSL-aware: prepend 'wsl' and convert paths when needed)
             List<String> command = NodeDetector.buildNodeScriptCommand(nodePath, scriptPath);
             command.add(NodeDetector.isWslPath(nodePath) ? NodeDetector.convertToWslPath(dbPath) : dbPath);
+            command.add(appType);
             ProcessBuilder pb = new ProcessBuilder(command);
             pb.directory(new File(aiBridgePath));
             pb.redirectErrorStream(true); // Merge stderr into stdout

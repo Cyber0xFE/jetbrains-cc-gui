@@ -1,16 +1,26 @@
 import { act, fireEvent, render, screen, cleanup } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createRef } from 'react';
+import { createRef, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { ClaudeMessage, ClaudeContentBlock, ToolResultBlock } from '../types';
 import { MessageList } from './MessageList';
+import { reconcileMessageKeys, type MessageKeySnapshot } from '../utils/messageUtils';
 
 // Mock MessageItem to keep this suite focused on list-level paging behaviour.
 vi.mock('./MessageItem', () => ({
-  MessageItem: ({ messageKey, message }: { messageKey: string; message: ClaudeMessage }) => (
-    <div data-testid="message-item" data-key={messageKey} data-type={message.type}>
-      {message.content}
-    </div>
-  ),
+  MessageItem: ({ messageKey, message }: { messageKey: string; message: ClaudeMessage }) => {
+    const [localState, setLocalState] = useState('initial');
+    return (
+      <div
+        data-testid="message-item"
+        data-key={messageKey}
+        data-type={message.type}
+        data-local-state={localState}
+        onClick={() => setLocalState('preserved')}
+      >
+        {message.content}
+      </div>
+    );
+  },
 }));
 
 vi.mock('./WaitingIndicator', () => ({
@@ -81,12 +91,46 @@ const noopGetText = (m: ClaudeMessage) => m.content ?? '';
 const noopGetBlocks = (_m: ClaudeMessage): ClaudeContentBlock[] => [];
 const noopFindToolResult = (_id: string | undefined, _i: number): ToolResultBlock | null => null;
 const noopExtractMd = (_m: ClaudeMessage) => '';
+const keysFor = (messages: ClaudeMessage[]) =>
+  reconcileMessageKeys(messages, undefined, 'test-session').keys;
+
+function StableMessageList({
+  messages,
+}: {
+  messages: ClaudeMessage[];
+}) {
+  const previousRef = useRef<MessageKeySnapshot | undefined>(undefined);
+  const snapshot = useMemo(
+    () => reconcileMessageKeys(messages, previousRef.current, 'test-session'),
+    [messages],
+  );
+  useLayoutEffect(() => {
+    previousRef.current = snapshot;
+  }, [snapshot]);
+  return (
+    <MessageList
+      messages={messages}
+      messageKeys={snapshot.keys}
+      streamingActive
+      isThinking
+      loading={false}
+      loadingStartTime={null}
+      t={t}
+      getMessageText={noopGetText}
+      getContentBlocks={noopGetBlocks}
+      findToolResult={noopFindToolResult}
+      extractMarkdownContent={noopExtractMd}
+      messagesEndRef={createRef<HTMLDivElement>()}
+    />
+  );
+}
 
 function renderList(messages: ClaudeMessage[]) {
   const endRef = createRef<HTMLDivElement>();
   return render(
     <MessageList
       messages={messages}
+      messageKeys={keysFor(messages)}
       streamingActive={false}
       isThinking={false}
       loading={false}
@@ -173,6 +217,7 @@ describe('MessageList paged collapse', () => {
     const { rerender, container } = render(
       <MessageList
         messages={messages}
+        messageKeys={keysFor(messages)}
         streamingActive={false}
         isThinking={false}
         loading={false}
@@ -198,6 +243,7 @@ describe('MessageList paged collapse', () => {
     rerender(
       <MessageList
         messages={makeMessages(50, 'session2')}
+        messageKeys={keysFor(makeMessages(50, 'session2'))}
         streamingActive={false}
         isThinking={false}
         loading={false}
@@ -227,6 +273,7 @@ describe('MessageList paged collapse', () => {
     const { container, rerender } = render(
       <MessageList
         messages={firstSession}
+        messageKeys={keysFor(firstSession)}
         streamingActive={false}
         isThinking={false}
         loading={false}
@@ -246,6 +293,7 @@ describe('MessageList paged collapse', () => {
     rerender(
       <MessageList
         messages={secondSession}
+        messageKeys={keysFor(secondSession)}
         streamingActive={false}
         isThinking={false}
         loading={false}
@@ -269,6 +317,7 @@ describe('MessageList paged collapse', () => {
     const { container } = render(
       <MessageList
         messages={makeMessages(20)}
+        messageKeys={keysFor(makeMessages(20))}
         streamingActive={false}
         isThinking={false}
         loading={false}
@@ -315,6 +364,75 @@ describe('MessageList paged collapse', () => {
 describe('MessageList container behaviour', () => {
   afterEach(cleanup);
 
+  it('preserves the live assistant component when a tool snapshot adds its UUID', () => {
+    const initialMessage: ClaudeMessage = {
+      type: 'assistant',
+      content: '',
+      timestamp: '2026-07-28T09:00:00.000Z',
+      isStreaming: true,
+      __turnId: 42,
+      raw: {
+        message: {
+          content: [{ type: 'thinking', thinking: 'Working through it' }],
+        },
+      },
+    };
+    const renderMessageList = (messages: ClaudeMessage[]) => <StableMessageList messages={messages} />;
+    const { rerender } = render(renderMessageList([initialMessage]));
+    const liveItem = screen.getByTestId('message-item');
+
+    fireEvent.click(liveItem);
+    expect(liveItem.getAttribute('data-local-state')).toBe('preserved');
+
+    const toolSnapshot: ClaudeMessage = {
+      ...initialMessage,
+      raw: {
+        uuid: 'backend-assistant-uuid',
+        message: {
+          content: [
+            { type: 'thinking', thinking: 'Working through it' },
+            { type: 'tool_use', id: 'tool-1', name: 'Read', input: { file_path: '/tmp/example' } },
+          ],
+        },
+      },
+    };
+    rerender(renderMessageList([toolSnapshot]));
+
+    expect(screen.getByTestId('message-item')).toBe(liveItem);
+    expect(liveItem.getAttribute('data-key')).toBe('test-session:turn-42');
+    expect(liveItem.getAttribute('data-local-state')).toBe('preserved');
+
+    rerender(renderMessageList([{ ...toolSnapshot, __turnId: undefined }]));
+
+    expect(screen.getByTestId('message-item')).toBe(liveItem);
+    expect(liveItem.getAttribute('data-key')).toBe('test-session:turn-42');
+    expect(liveItem.getAttribute('data-local-state')).toBe('preserved');
+  });
+
+  it('preserves a UUID-keyed replay message when a runtime turn ID is attached', () => {
+    const replayMessage: ClaudeMessage = {
+      type: 'assistant',
+      content: '',
+      timestamp: '2026-07-28T09:00:00.000Z',
+      raw: {
+        uuid: 'replay-assistant-uuid',
+        message: {
+          content: [{ type: 'thinking', thinking: 'Resuming the thought' }],
+        },
+      },
+    };
+    const renderMessageList = (message: ClaudeMessage) => <StableMessageList messages={[message]} />;
+    const { rerender } = render(renderMessageList(replayMessage));
+    const replayItem = screen.getByTestId('message-item');
+
+    fireEvent.click(replayItem);
+    rerender(renderMessageList({ ...replayMessage, isStreaming: true, __turnId: 43 }));
+
+    expect(screen.getByTestId('message-item')).toBe(replayItem);
+    expect(replayItem.getAttribute('data-key')).toBe('test-session:replay-assistant-uuid');
+    expect(replayItem.getAttribute('data-local-state')).toBe('preserved');
+  });
+
   it('uses the latest message index for isLast even when paginated', () => {
     const messages = makeMessages(40);
     renderList(messages);
@@ -329,6 +447,7 @@ describe('MessageList container behaviour', () => {
     render(
       <MessageList
         messages={makeMessages(3)}
+        messageKeys={keysFor(makeMessages(3))}
         streamingActive={false}
         isThinking={false}
         loading={true}

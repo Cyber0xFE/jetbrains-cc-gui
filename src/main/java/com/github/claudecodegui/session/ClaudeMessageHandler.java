@@ -2,9 +2,12 @@ package com.github.claudecodegui.session;
 
 import com.github.claudecodegui.session.ClaudeSession.Message;
 import com.github.claudecodegui.handler.SettingsHandler;
+import com.github.claudecodegui.handler.provider.ModelProviderHandler;
 import com.github.claudecodegui.notifications.ClaudeNotifier;
 import com.github.claudecodegui.provider.common.MessageCallback;
+import com.github.claudecodegui.settings.CodemossSettingsService;
 import com.github.claudecodegui.provider.common.SDKResult;
+import com.github.claudecodegui.provider.claude.ClaudePlanUsageService;
 import com.github.claudecodegui.util.TokenUsageUtils;
 import com.github.claudecodegui.util.UsageCostCalculator;
 import com.github.claudecodegui.util.UserMessageSanitizer;
@@ -31,6 +34,7 @@ public class ClaudeMessageHandler implements MessageCallback {
     private final MessageMerger messageMerger;
     private final ReplayDeduplicator replayDedup = new ReplayDeduplicator();
     private final Gson gson;
+    private final CodemossSettingsService settingsService;
 
     // Content accumulator for the current assistant message
     private final StringBuilder assistantContent = new StringBuilder();
@@ -67,12 +71,30 @@ public class ClaudeMessageHandler implements MessageCallback {
             MessageMerger messageMerger,
             Gson gson
     ) {
+        this(project, state, callbackHandler, messageParser, messageMerger, gson, null);
+    }
+
+    /**
+     * Constructor with an injectable settings service. The service is used to resolve the
+     * model actually billed for a turn (slot ID → provider-mapped real ID); tests inject a
+     * fake so pricing never depends on the developer's real config file.
+     */
+    ClaudeMessageHandler(
+            Project project,
+            SessionState state,
+            CallbackHandler callbackHandler,
+            MessageParser messageParser,
+            MessageMerger messageMerger,
+            Gson gson,
+            CodemossSettingsService settingsService
+    ) {
         this.project = project;
         this.state = state;
         this.callbackHandler = callbackHandler;
         this.messageParser = messageParser;
         this.messageMerger = messageMerger;
         this.gson = gson;
+        this.settingsService = settingsService != null ? settingsService : new CodemossSettingsService();
     }
 
     /**
@@ -143,6 +165,9 @@ public class ClaudeMessageHandler implements MessageCallback {
                 break;
             case "system":
                 handleSystemMessage(content);
+                break;
+            case "rate_limit_event":
+                handleRateLimit(content);
                 break;
             case "node_log":
                 // Forward Node.js logs to frontend console
@@ -363,7 +388,7 @@ public class ClaudeMessageHandler implements MessageCallback {
                 JsonObject messageObj = mergedRaw.getAsJsonObject("message");
                 if (messageObj.has("usage") && messageObj.get("usage").isJsonObject()) {
                     JsonObject usage = messageObj.getAsJsonObject("usage");
-                    int usedTokens = TokenUsageUtils.extractUsedTokens(usage, state.getProvider());
+                    int usedTokens = TokenUsageUtils.extractContextTokens(usage, state.getProvider());
                     int maxTokens = SettingsHandler.getModelContextLimit(state.getModel());
                     ClaudeNotifier.setTokenUsage(project, usedTokens, maxTokens);
                     callbackHandler.notifyUsageUpdate(usedTokens, maxTokens);
@@ -593,6 +618,27 @@ public class ClaudeMessageHandler implements MessageCallback {
     }
 
     /**
+     * Resolve the model that should be billed for this turn.
+     *
+     * <p>The chat UI selects Claude slot IDs (e.g. {@code claude-sonnet-4-6[1m]}), which the
+     * active provider's env maps to real model IDs (e.g. {@code deepseek-v4-flash}) before the
+     * request reaches the API. Pricing must use the real ID — otherwise a custom price configured
+     * for the mapped model is never matched and the turn is billed at built-in Claude rates
+     * (same resolution used for the context limit at {@link ModelProviderHandler}).
+     */
+    private String resolvePricingModel(String model) {
+        try {
+            JsonObject claudeSettings = settingsService.readClaudeSettings();
+            if (claudeSettings != null && claudeSettings.has("env") && claudeSettings.get("env").isJsonObject()) {
+                return ModelProviderHandler.resolveConfiguredClaudeModel(model, claudeSettings.getAsJsonObject("env"));
+            }
+        } catch (Exception e) {
+            LOG.warn("Failed to resolve pricing model: " + e.getMessage());
+        }
+        return model;
+    }
+
+    /**
      * Handle the result message as a fallback for non-streaming mode.
      * In streaming mode, usage is updated via handleUsage() from [USAGE] tags.
      * In non-streaming mode, [USAGE] tags may not be emitted, so result.usage
@@ -614,7 +660,7 @@ public class ClaudeMessageHandler implements MessageCallback {
                 // for the status bar and must keep its semantics.
                 JsonObject turnUsage = resultJson.getAsJsonObject("usage");
                 currentAssistantMessage.raw.add("turnUsage", turnUsage.deepCopy());
-                Double turnCostUsd = UsageCostCalculator.calculateTurnCostUsd(state.getProvider(), turnUsage, state.getModel());
+                Double turnCostUsd = UsageCostCalculator.calculateTurnCostUsd(state.getProvider(), turnUsage, resolvePricingModel(state.getModel()));
                 if (turnCostUsd != null) {
                     currentAssistantMessage.raw.addProperty("turnCostUsd", turnCostUsd);
                 }
@@ -629,7 +675,7 @@ public class ClaudeMessageHandler implements MessageCallback {
                     if (msg != null) {
                         msg.add("usage", usageJson);
                     }
-                    int usedTokens = TokenUsageUtils.extractUsedTokens(usageJson, state.getProvider());
+                    int usedTokens = TokenUsageUtils.extractContextTokens(usageJson, state.getProvider());
                     int maxTokens = SettingsHandler.getModelContextLimit(state.getModel());
                     ClaudeNotifier.setTokenUsage(project, usedTokens, maxTokens);
                     callbackHandler.notifyUsageUpdate(usedTokens, maxTokens);
@@ -664,11 +710,39 @@ public class ClaudeMessageHandler implements MessageCallback {
      * Handle a system-level message (not from AI, but from the system).
      */
     private void handleSystemMessage(String content) {
-        LOG.debug("System message: " + content);
+        // Truncate to avoid dumping full system messages (which may carry
+        // slash_commands or task_notification payloads) into the IDE log.
+        LOG.debug("System message: " + (content.length() > 200 ? content.substring(0, 200) + "..." : content));
 
         // Parse slash_commands field from the system message
         try {
             JsonObject systemObj = gson.fromJson(content, JsonObject.class);
+            // gson.fromJson returns null for a JSON "null" literal; guard the
+            // has()/get() calls below against NPE. In practice [MESSAGE]
+            // payloads are always JSON objects, but keep the parse defensive.
+            if (systemObj == null) {
+                return;
+            }
+
+            // Forward task_* SDK system events (async subagent lifecycle) to the
+            // frontend. Async agents run in a background sidechain whose detailed
+            // messages never enter the main stream; the only mainstream signal of
+            // their existence is these lightweight events (task_started /
+            // task_progress / task_notification). Without forwarding, the subagent
+            // list cannot tell launch from completion, and async results vanish.
+            //
+            // This is the in-turn [MESSAGE] delivery path. task_notification may
+            // also arrive inter-turn via the daemon channel (DaemonBridge
+            // "task_event" -> ClaudeChatWindow -> onTaskEvent); both paths are
+            // intentional defense-in-depth - see DaemonBridge.handleDaemonEvent.
+            String subtype = systemObj.has("subtype") && !systemObj.get("subtype").isJsonNull()
+                    ? systemObj.get("subtype").getAsString() : null;
+            if (subtype != null && subtype.startsWith("task_")) {
+                callbackHandler.notifyTaskEvent(content);
+                // task_* events carry no slash_commands; skip the rest.
+                return;
+            }
+
             if (systemObj.has("slash_commands") && systemObj.get("slash_commands").isJsonArray()) {
                 JsonArray commandsArray = systemObj.getAsJsonArray("slash_commands");
                 List<String> commands = new ArrayList<>();
@@ -680,7 +754,31 @@ public class ClaudeMessageHandler implements MessageCallback {
                 callbackHandler.notifySlashCommandsReceived(commands);
             }
         } catch (Exception e) {
-            LOG.warn("Failed to extract slash commands from system message: " + e.getMessage());
+            LOG.warn("Failed to parse system message: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Handle a {@code rate_limit_event} from the SDK stream (real Anthropic subscription).
+     * Extracts {@code rate_limit_info} and caches it so the plan-usage poll
+     * ({@code get_claude_plan_usage}) can surface utilization + reset in the ContextBar.
+     * Only fires on real Anthropic (OAuth subscription) backends.
+     */
+    private void handleRateLimit(String content) {
+        if (content == null || !content.startsWith("{")) {
+            return;
+        }
+        try {
+            JsonObject msg = gson.fromJson(content, JsonObject.class);
+            if (msg == null
+                    || !msg.has("rate_limit_info")
+                    || !msg.get("rate_limit_info").isJsonObject()) {
+                return;
+            }
+            ClaudePlanUsageService.cacheRateLimitInfo(msg.getAsJsonObject("rate_limit_info"));
+            LOG.debug("Cached Claude rate_limit_event");
+        } catch (Exception e) {
+            LOG.warn("Failed to parse rate_limit_event: " + e.getMessage());
         }
     }
 
@@ -932,7 +1030,7 @@ public class ClaudeMessageHandler implements MessageCallback {
         if (content == null || content.isEmpty() || !content.startsWith("{")) { return; }
         try {
             JsonObject usageJson = gson.fromJson(content, JsonObject.class);
-            int usedTokens = TokenUsageUtils.extractUsedTokens(usageJson, state.getProvider());
+            int usedTokens = TokenUsageUtils.extractContextTokens(usageJson, state.getProvider());
             int maxTokens = SettingsHandler.getModelContextLimit(state.getModel());
             ClaudeNotifier.setTokenUsage(project, usedTokens, maxTokens);
             // Notify webview of usage update

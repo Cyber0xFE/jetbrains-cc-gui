@@ -5,6 +5,9 @@ import com.github.claudecodegui.provider.common.MessageCallback;
 import com.github.claudecodegui.provider.common.SDKResult;
 import com.github.claudecodegui.session.ClaudeSession.Message;
 import com.github.claudecodegui.util.UsageCostCalculator;
+import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
 import com.intellij.openapi.diagnostic.Logger;
 
 /**
@@ -50,6 +53,8 @@ public class CodexMessageHandler implements MessageCallback {
      * stream ended this turn.
      */
     private boolean streamEndedThisTurn = false;
+
+    private com.google.gson.JsonObject currentTurnContextUsage;
 
     /**
      * Constructor.
@@ -279,7 +284,11 @@ public class CodexMessageHandler implements MessageCallback {
             // Normalize to the Claude usage schema (input excludes cache) and stamp it
             // as turnUsage for the per-turn token display in the webview.
             com.google.gson.JsonObject turnUsage = buildTurnUsage(usage);
-            boolean updated = attachUsageToLastAssistant(usage, turnUsage);
+            // turn.completed usage is per-turn accounting only. Some Codex SDK
+            // versions expose session-cumulative values here, and the result never
+            // carries the authoritative context window. Only token_count may update
+            // the top-level context snapshot.
+            boolean updated = attachUsageToLastAssistant(currentTurnContextUsage, turnUsage);
             if (updated) {
                 callbackHandler.notifyMessageUpdate(state.getMessages());
                 LOG.info("Codex usage applied from result message");
@@ -344,25 +353,32 @@ public class CodexMessageHandler implements MessageCallback {
             }
 
             com.google.gson.JsonObject info = payload.getAsJsonObject("info");
-            if (!info.has("total_token_usage") || !info.get("total_token_usage").isJsonObject()) {
+            if (!info.has("last_token_usage") || !info.get("last_token_usage").isJsonObject()) {
+                // total_token_usage is cumulative across the whole session and can
+                // exceed the active model window. It is valid only for Node-side
+                // per-turn delta calculation, never as the current-context numerator.
+                LOG.debug("Ignoring Codex token_count without last_token_usage");
                 return;
             }
+            com.google.gson.JsonObject contextUsage = info.getAsJsonObject("last_token_usage");
 
-            com.google.gson.JsonObject totalUsage = info.getAsJsonObject("total_token_usage");
-            int inputTokens = totalUsage.has("input_tokens") ? totalUsage.get("input_tokens").getAsInt() : 0;
-            int outputTokens = totalUsage.has("output_tokens") ? totalUsage.get("output_tokens").getAsInt() : 0;
-            int cachedInputTokens = totalUsage.has("cached_input_tokens") ? totalUsage.get("cached_input_tokens").getAsInt() : 0;
+            int inputTokens = readInt(contextUsage, "input_tokens");
+            int outputTokens = readInt(contextUsage, "output_tokens");
+            int cachedInputTokens = readInt(contextUsage, "cached_input_tokens");
 
             com.google.gson.JsonObject usage = new com.google.gson.JsonObject();
             usage.addProperty("input_tokens", inputTokens);
             usage.addProperty("output_tokens", outputTokens);
             usage.addProperty("cache_read_input_tokens", cachedInputTokens);
             usage.addProperty("cache_creation_input_tokens", 0);
+            int modelContextWindow = readInt(info, "model_context_window");
+            if (modelContextWindow > 0) {
+                usage.addProperty("model_context_window", modelContextWindow);
+            }
+            currentTurnContextUsage = usage.deepCopy();
 
-            // token_count carries total_token_usage (session-cumulative), which feeds the
-            // context-usage status bar via the top-level usage field. It is NOT turn-scoped,
-            // so never stamp it as turnUsage — the turn aggregate comes from the result
-            // message (turn.completed) in handleResultMessage.
+            // token_count is not turn-scoped, so never stamp it as turnUsage. The latest
+            // token usage is used for the context status; cumulative totals are ignored.
             boolean updated = attachUsageToLastAssistant(usage, null);
             if (updated) {
                 callbackHandler.notifyMessageUpdate(state.getMessages());
@@ -390,7 +406,9 @@ public class CodexMessageHandler implements MessageCallback {
         for (int i = messages.size() - 1; i >= 0; i--) {
             Message msg = messages.get(i);
             if (msg.type == Message.Type.ASSISTANT && msg.raw != null) {
-                msg.raw.add("usage", usage);
+                if (usage != null) {
+                    msg.raw.add("usage", usage);
+                }
                 if (turnUsage != null) {
                     msg.raw.add("turnUsage", turnUsage);
                     Double turnCostUsd = UsageCostCalculator.calculateTurnCostUsd("codex", turnUsage, state.getModel());
@@ -495,13 +513,20 @@ public class CodexMessageHandler implements MessageCallback {
 
     private Message buildUserMessage(com.google.gson.JsonObject msg, String content) {
         boolean hasToolResult = containsToolResult(msg);
+        JsonArray imageBlocks = new JsonArray();
         if (!hasToolResult) {
+            imageBlocks = collectUserImageBlocks(msg, content);
             content = CodexMessageConverter.stripSystemTags(content);
-            if (content != null && !content.trim().isEmpty()) {
-                rewriteUserRawContent(msg, content);
+            if ((content != null && !content.trim().isEmpty()) || imageBlocks.size() > 0) {
+                rewriteUserRawContent(msg, content, imageBlocks);
             }
         }
         if (content == null || content.trim().isEmpty()) {
+            if (imageBlocks.size() > 0) {
+                Message result = new Message(Message.Type.USER, "");
+                result.raw = msg;
+                return result;
+            }
             if (hasToolResult) {
                 Message result = new Message(Message.Type.USER, "[tool_result]");
                 result.raw = msg;
@@ -649,18 +674,37 @@ public class CodexMessageHandler implements MessageCallback {
      * @param content visible content
      * @since 1.0.0
      */
-    private void rewriteUserRawContent(com.google.gson.JsonObject msg, String content) {
-        com.google.gson.JsonArray contentBlocks = new com.google.gson.JsonArray();
-        com.google.gson.JsonObject textBlock = new com.google.gson.JsonObject();
-        textBlock.addProperty("type", "text");
-        textBlock.addProperty("text", content);
-        contentBlocks.add(textBlock);
+    private void rewriteUserRawContent(com.google.gson.JsonObject msg, String content, JsonArray imageBlocks) {
+        JsonArray contentBlocks = CodexMessageConverter.userContentBlocks(imageBlocks, content);
 
         if (msg.has("message") && msg.get("message").isJsonObject()) {
             msg.getAsJsonObject("message").add("content", contentBlocks);
         } else {
             msg.add("content", contentBlocks);
         }
+    }
+
+    private JsonArray collectUserImageBlocks(com.google.gson.JsonObject msg, String originalContent) {
+        JsonArray imageBlocks = new JsonArray();
+        JsonElement contentElement = getMessageContentElement(msg);
+        if (contentElement != null && contentElement.isJsonArray()) {
+            JsonArray contentArray = contentElement.getAsJsonArray();
+            for (int i = 0; i < contentArray.size(); i++) {
+                JsonElement element = contentArray.get(i);
+                if (!element.isJsonObject()) {
+                    continue;
+                }
+                JsonObject block = element.getAsJsonObject();
+                if (block.has("type") && "image".equals(block.get("type").getAsString())) {
+                    imageBlocks.add(block.deepCopy());
+                }
+            }
+        }
+        JsonArray restoredImages = CodexMessageConverter.restoreCodexImagePlaceholderBlocks(originalContent);
+        for (JsonElement restoredImage : restoredImages) {
+            imageBlocks.add(restoredImage);
+        }
+        return imageBlocks;
     }
 
     /**
@@ -803,6 +847,7 @@ public class CodexMessageHandler implements MessageCallback {
     private void handleStreamStart() {
         isStreaming = true;
         streamEndedThisTurn = false;
+        currentTurnContextUsage = null;
         resetStreamingAccumulator();
         callbackHandler.notifyStreamStart();
         LOG.debug("Codex stream started");
