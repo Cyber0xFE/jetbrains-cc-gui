@@ -7,6 +7,7 @@ import com.github.claudecodegui.provider.common.MessageCallback;
 import com.github.claudecodegui.provider.common.SDKResult;
 import com.github.claudecodegui.util.TokenUsageUtils;
 import com.github.claudecodegui.util.UsageCostCalculator;
+import com.github.claudecodegui.util.UserMessageSanitizer;
 import com.google.gson.Gson;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
@@ -516,7 +517,7 @@ public class ClaudeMessageHandler implements MessageCallback {
                 if (msg.type != Message.Type.USER) {
                     continue;
                 }
-                if (!userText.equals(msg.content)) {
+                if (!UserMessageSanitizer.matchesUserText(userText, msg.content)) {
                     continue;
                 }
                 if (msg.raw == null) {

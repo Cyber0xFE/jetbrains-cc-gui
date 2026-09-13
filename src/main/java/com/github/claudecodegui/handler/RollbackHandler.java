@@ -3,9 +3,11 @@ package com.github.claudecodegui.handler;
 import com.github.claudecodegui.handler.core.BaseMessageHandler;
 import com.github.claudecodegui.handler.core.HandlerContext;
 import com.github.claudecodegui.session.ClaudeSession;
+import com.github.claudecodegui.session.MessageParser;
 import com.github.claudecodegui.session.SessionState;
 import com.github.claudecodegui.util.MessageJsonConverter;
 import com.github.claudecodegui.util.PlatformUtils;
+import com.github.claudecodegui.util.UserMessageSanitizer;
 import com.google.gson.Gson;
 import com.google.gson.JsonObject;
 import com.intellij.openapi.application.ApplicationManager;
@@ -44,6 +46,8 @@ public class RollbackHandler extends BaseMessageHandler {
 
     private static final Logger LOG = Logger.getInstance(RollbackHandler.class);
     private static final Gson gson = new Gson();
+    private static final MessageParser MESSAGE_PARSER = new MessageParser();
+    private static final String TOOL_RESULT_PLACEHOLDER = "[tool_result]";
 
     private static final String[] SUPPORTED_TYPES = {"rollback_to_message"};
 
@@ -74,17 +78,21 @@ public class RollbackHandler extends BaseMessageHandler {
         // ── Parse on the calling thread (pure memory, no I/O) ─────────
         JsonObject request;
         String messageUuid;
+        String localId;
+        String messageContent;
         ClaudeSession session;
         SessionState state;
         int keepCount;
+        String targetContent;
 
         try {
             request = gson.fromJson(content, JsonObject.class);
-            messageUuid = request.has("messageUuid")
-                ? request.get("messageUuid").getAsString() : null;
+            messageUuid = readString(request, "messageUuid");
+            localId = readString(request, "localId");
+            messageContent = readString(request, "messageContent");
 
-            if (messageUuid == null || messageUuid.isEmpty()) {
-                showError("Missing message UUID");
+            if (isBlank(messageUuid) && isBlank(localId) && isBlank(messageContent)) {
+                showError("Missing message identifier");
                 return;
             }
 
@@ -96,21 +104,11 @@ public class RollbackHandler extends BaseMessageHandler {
 
             state = session.getState();
 
-            // Find the target user message by UUID
+            // Locate the target user message. The provider uuid is authoritative when
+            // present; localId and the message text cover the window before it has been
+            // back-filled (see findUserMessageIndex).
             List<ClaudeSession.Message> messages = state.getMessagesReference();
-            int targetIndex = -1;
-            for (int i = 0; i < messages.size(); i++) {
-                ClaudeSession.Message msg = messages.get(i);
-                if (msg.type != ClaudeSession.Message.Type.USER || msg.raw == null) {
-                    continue;
-                }
-                String uuid = msg.raw.has("uuid")
-                    ? msg.raw.get("uuid").getAsString() : null;
-                if (messageUuid.equals(uuid)) {
-                    targetIndex = i;
-                    break;
-                }
-            }
+            int targetIndex = findUserMessageIndex(messages, messageUuid, localId, messageContent);
 
             if (targetIndex < 0) {
                 showError("Target message not found in session");
@@ -118,6 +116,7 @@ public class RollbackHandler extends BaseMessageHandler {
             }
 
             keepCount = targetIndex;
+            targetContent = messages.get(targetIndex).content;
         } catch (Exception e) {
             LOG.error("[RollbackHandler] Parse failed: " + e.getMessage(), e);
             showError("Rollback failed: " + e.getMessage());
@@ -127,6 +126,7 @@ public class RollbackHandler extends BaseMessageHandler {
         // Snapshot values for the async block (they must be final / effectively final).
         final int finalKeepCount = keepCount;
         final String finalUuid = messageUuid;
+        final String finalTargetContent = targetContent;
         final SessionState finalState = state;
         final ClaudeSession finalSession = session;
 
@@ -164,7 +164,7 @@ public class RollbackHandler extends BaseMessageHandler {
                     finalState.rotateRuntimeSessionEpoch();
                     LOG.info("[RollbackHandler] Session reset — sessionId cleared");
                 } else {
-                    truncateSessionJsonl(finalState, finalUuid);
+                    truncateSessionJsonl(finalState, finalUuid, finalTargetContent);
                 }
 
                 // 5. Push result to frontend (back on UI thread)
@@ -183,6 +183,77 @@ public class RollbackHandler extends BaseMessageHandler {
                     showError("Rollback failed: " + e.getMessage()));
             }
         });
+    }
+
+    // ── Message resolution ──────────────────────────────────────────────
+
+    /**
+     * Locates the target user message in the session's message list, returning its index
+     * or -1 when it cannot be resolved.
+     *
+     * <p>Resolution order: provider uuid, then the locally assigned
+     * {@link ClaudeSession.Message#localId}, then the message text. The latter two exist
+     * because the provider uuid is only back-filled once the CLI echoes the message and
+     * the back-fill compares text — so it can legitimately be missing for a message that
+     * is already on screen, which is exactly when a user clicks rollback.
+     *
+     * <p>Package-private for testability.
+     */
+    static int findUserMessageIndex(List<ClaudeSession.Message> messages,
+                                    String uuid, String localId, String content) {
+        if (!isBlank(uuid)) {
+            for (int i = messages.size() - 1; i >= 0; i--) {
+                ClaudeSession.Message msg = messages.get(i);
+                if (msg.type != ClaudeSession.Message.Type.USER || msg.raw == null) {
+                    continue;
+                }
+                if (uuid.equals(readString(msg.raw, "uuid"))) {
+                    return i;
+                }
+            }
+        }
+
+        if (!isBlank(localId)) {
+            for (int i = messages.size() - 1; i >= 0; i--) {
+                ClaudeSession.Message msg = messages.get(i);
+                if (msg.type != ClaudeSession.Message.Type.USER) {
+                    continue;
+                }
+                if (localId.equals(msg.localId)) {
+                    return i;
+                }
+            }
+        }
+
+        if (!isBlank(content)) {
+            for (int i = messages.size() - 1; i >= 0; i--) {
+                ClaudeSession.Message msg = messages.get(i);
+                if (msg.type != ClaudeSession.Message.Type.USER) {
+                    continue;
+                }
+                if (msg.content == null || TOOL_RESULT_PLACEHOLDER.equals(msg.content)) {
+                    continue;
+                }
+                // Last match wins: when the same text was sent twice, the later message
+                // is the one on screen, and discarding from there onward is the safe pick.
+                if (UserMessageSanitizer.matchesUserText(content, msg.content)) {
+                    return i;
+                }
+            }
+        }
+
+        return -1;
+    }
+
+    private static String readString(JsonObject obj, String field) {
+        if (obj == null || !obj.has(field) || obj.get(field).isJsonNull()) {
+            return null;
+        }
+        return obj.get(field).getAsString();
+    }
+
+    private static boolean isBlank(String value) {
+        return value == null || value.trim().isEmpty();
     }
 
     // ── JSONL operations ────────────────────────────────────────────────
@@ -204,7 +275,7 @@ public class RollbackHandler extends BaseMessageHandler {
         }
     }
 
-    private static void truncateSessionJsonl(SessionState state, String messageUuid) {
+    private static void truncateSessionJsonl(SessionState state, String messageUuid, String messageContent) {
         String sessionId = state.getSessionId();
         if (sessionId == null || sessionId.isEmpty()) {
             return;
@@ -216,16 +287,13 @@ public class RollbackHandler extends BaseMessageHandler {
                 return;
             }
             List<String> lines = Files.readAllLines(jsonlPath, StandardCharsets.UTF_8);
-            int targetLine = -1;
-            for (int i = 0; i < lines.size(); i++) {
-                JsonObject obj = gson.fromJson(lines.get(i), JsonObject.class);
-                String candidate = obj.has("uuid") ? obj.get("uuid").getAsString() : null;
-                if (messageUuid.equals(candidate)) {
-                    targetLine = i;
-                    break;
-                }
-            }
+            int targetLine = findJsonlTargetLine(lines, gson, messageUuid, messageContent);
             if (targetLine < 0 || targetLine >= lines.size()) {
+                // The message is not in the file. That is the expected state right after
+                // sending — the CLI persists messages asynchronously — so there is nothing
+                // to truncate. Logged at info level because a persisted-but-unmatched
+                // message would leave the file ahead of the session state.
+                LOG.info("[RollbackHandler] Target message not present in JSONL, nothing to truncate");
                 return;
             }
             // Exclude the target message itself (text is restored to input box)
@@ -241,6 +309,52 @@ public class RollbackHandler extends BaseMessageHandler {
                 + lines.size() + " → " + targetLine + " lines");
         } catch (IOException | IllegalArgumentException e) {
             LOG.warn("[RollbackHandler] JSONL truncation failed: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Index of the JSONL line holding the target message, or -1 when the file does not
+     * contain it yet.
+     *
+     * <p>Lookup mirrors {@link #findUserMessageIndex}: provider uuid first, falling back
+     * to a normalized text match on user records for messages whose uuid is unknown.
+     *
+     * <p>Package-private for testability.
+     */
+    static int findJsonlTargetLine(List<String> lines, Gson gson, String uuid, String content) {
+        if (!isBlank(uuid)) {
+            for (int i = lines.size() - 1; i >= 0; i--) {
+                JsonObject obj = parseJsonLine(gson, lines.get(i));
+                if (obj != null && uuid.equals(readString(obj, "uuid"))) {
+                    return i;
+                }
+            }
+        }
+
+        if (!isBlank(content)) {
+            for (int i = lines.size() - 1; i >= 0; i--) {
+                JsonObject obj = parseJsonLine(gson, lines.get(i));
+                if (obj == null || !"user".equals(readString(obj, "type"))) {
+                    continue;
+                }
+                String text = MESSAGE_PARSER.extractMessageContent(obj);
+                if (isBlank(text)) {
+                    continue;
+                }
+                if (UserMessageSanitizer.matchesUserText(content, text)) {
+                    return i;
+                }
+            }
+        }
+
+        return -1;
+    }
+
+    private static JsonObject parseJsonLine(Gson gson, String line) {
+        try {
+            return gson.fromJson(line, JsonObject.class);
+        } catch (Exception e) {
+            return null;
         }
     }
 

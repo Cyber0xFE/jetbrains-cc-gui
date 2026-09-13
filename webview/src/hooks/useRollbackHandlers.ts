@@ -10,7 +10,10 @@ const ROLLBACK_TIMEOUT_MS = 30_000;
 
 export interface RollbackRequest {
   messageIndex: number;
-  messageUuid: string;
+  /** Provider uuid; may be absent until the CLI echoes the message back. */
+  messageUuid?: string;
+  /** Backend-assigned message id; present as soon as the message exists. */
+  localId?: string;
   messageContent: string;
   messageTimestamp?: string;
   messagesAfterCount: number;
@@ -155,18 +158,24 @@ export function useRollbackHandlers(
       );
       const hasFileChanges = fileChanges.length > 0;
 
-      // Extract UUID from raw message (same approach as Rewind)
+      // Extract UUID from raw message (same approach as Rewind). It may still be
+      // missing: the backend only back-fills it once the CLI echoes the message, so a
+      // just-sent message does not have one yet. localId and the text are sent along so
+      // the backend can still resolve the message.
       const raw = targetMessage.raw;
       const uuid = typeof raw === 'object' && raw !== null
         ? (raw as Record<string, unknown>).uuid as string | undefined
         : undefined;
-      if (!uuid) {
+      const localId = typeof targetMessage.localId === 'string' ? targetMessage.localId : undefined;
+
+      // Get display content for the dialog
+      const content = targetMessage.content || getMessageText(targetMessage);
+
+      if (!uuid && !localId && !content) {
         addToast(t('rollback.notAvailable', 'Rollback not available for this message'), 'warning');
         return;
       }
 
-      // Get display content for the dialog
-      const content = targetMessage.content || getMessageText(targetMessage);
       const timestamp = targetMessage.timestamp
         ? formatTime(targetMessage.timestamp)
         : undefined;
@@ -174,6 +183,7 @@ export function useRollbackHandlers(
       setCurrentRollbackRequest({
         messageIndex: targetIndex,
         messageUuid: uuid,
+        localId,
         messageContent: content,
         messageTimestamp: timestamp,
         messagesAfterCount,
@@ -221,8 +231,12 @@ export function useRollbackHandlers(
         }
       };
 
+      // Send every identifier we have. The backend prefers messageUuid, then localId,
+      // then messageContent, so rollback works even before the uuid is back-filled.
       sendToJava('rollback_to_message', {
         messageUuid: currentRollbackRequest?.messageUuid,
+        localId: currentRollbackRequest?.localId,
+        messageContent: currentRollbackRequest?.messageContent,
       });
     },
     [currentRollbackRequest, clearRollbackTimeout, finishRollback, addToast, t],

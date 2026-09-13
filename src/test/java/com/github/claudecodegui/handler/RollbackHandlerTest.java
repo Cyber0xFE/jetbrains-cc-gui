@@ -1,8 +1,14 @@
 package com.github.claudecodegui.handler;
 
+import com.github.claudecodegui.session.ClaudeSession;
+import com.google.gson.Gson;
+import com.google.gson.JsonObject;
 import org.junit.Test;
 
 import java.nio.file.Paths;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
 
 import static org.junit.Assert.*;
 
@@ -107,5 +113,150 @@ public class RollbackHandlerTest {
         // A non-existent directory name should still produce a valid-looking path
         String path = RollbackHandler.buildJsonlPath("/nonexistent/path", "valid-uuid-123").toString();
         assertTrue(path.replace("\\", "/").contains("/nonexistent/path".replace("/", "-")));
+    }
+
+    // ── findUserMessageIndex ─────────────────────────────────────────────
+
+    private static ClaudeSession.Message userMessage(String content, String uuid, String localId) {
+        ClaudeSession.Message message = new ClaudeSession.Message(ClaudeSession.Message.Type.USER, content);
+        if (uuid != null) {
+            JsonObject raw = new JsonObject();
+            raw.addProperty("uuid", uuid);
+            message.raw = raw;
+        }
+        if (localId != null) {
+            message.localId = localId;
+        }
+        return message;
+    }
+
+    @Test
+    public void findUserMessageIndexPrefersUuidOverLocalIdAndText() {
+        List<ClaudeSession.Message> messages = new ArrayList<>();
+        messages.add(userMessage("first", "uuid-1", "local-1"));
+        messages.add(userMessage("second", "uuid-2", "local-2"));
+
+        // Every identifier resolves to a different message; the uuid must win.
+        assertEquals(0, RollbackHandler.findUserMessageIndex(messages, "uuid-1", "local-2", "second"));
+    }
+
+    @Test
+    public void findUserMessageIndexFallsBackToLocalIdWhenUuidMissing() {
+        List<ClaudeSession.Message> messages = new ArrayList<>();
+        messages.add(userMessage("first", null, "local-1"));
+        messages.add(userMessage("second", null, "local-2"));
+
+        assertEquals(0, RollbackHandler.findUserMessageIndex(messages, null, "local-1", null));
+    }
+
+    @Test
+    public void findUserMessageIndexFallsBackToTextWhenNoIdentifierMatches() {
+        List<ClaudeSession.Message> messages = new ArrayList<>();
+        messages.add(userMessage("first", null, "local-1"));
+        messages.add(userMessage("second", null, "local-2"));
+
+        assertEquals(1, RollbackHandler.findUserMessageIndex(messages, "unknown", "unknown", "second"));
+    }
+
+    @Test
+    public void findUserMessageIndexMatchesTextAcrossFormattingDifferences() {
+        List<ClaudeSession.Message> messages = new ArrayList<>();
+        messages.add(userMessage("explain this\r\n\r\n\r\n", null, null));
+
+        // Same text as the stored content, only line endings and blank-line padding
+        // differ — the shape a uuid back-fill has to survive.
+        assertEquals(0, RollbackHandler.findUserMessageIndex(messages, null, null, "explain this"));
+    }
+
+    @Test
+    public void findUserMessageIndexIgnoresToolResultPlaceholders() {
+        List<ClaudeSession.Message> messages = new ArrayList<>();
+        messages.add(userMessage("[tool_result]", null, null));
+
+        assertEquals(-1, RollbackHandler.findUserMessageIndex(messages, null, null, "[tool_result]"));
+    }
+
+    @Test
+    public void findUserMessageIndexIgnoresAssistantMessages() {
+        List<ClaudeSession.Message> messages = new ArrayList<>();
+        messages.add(new ClaudeSession.Message(ClaudeSession.Message.Type.ASSISTANT, "same text"));
+
+        assertEquals(-1, RollbackHandler.findUserMessageIndex(messages, null, null, "same text"));
+    }
+
+    @Test
+    public void findUserMessageIndexReturnsLastMatchForDuplicateText() {
+        List<ClaudeSession.Message> messages = new ArrayList<>();
+        messages.add(userMessage("same", null, null));
+        messages.add(userMessage("same", null, null));
+
+        assertEquals(1, RollbackHandler.findUserMessageIndex(messages, null, null, "same"));
+    }
+
+    @Test
+    public void findUserMessageIndexReturnsMinusOneWhenUnresolved() {
+        List<ClaudeSession.Message> messages = new ArrayList<>();
+        messages.add(userMessage("first", null, null));
+
+        assertEquals(-1, RollbackHandler.findUserMessageIndex(messages, "nope", "nope", "different"));
+    }
+
+    // ── findJsonlTargetLine ──────────────────────────────────────────────
+
+    private static final Gson GSON = new Gson();
+
+    private static String userLine(String uuid, String text) {
+        return "{\"type\":\"user\",\"uuid\":\"" + uuid + "\","
+                + "\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"" + text + "\"}]}}";
+    }
+
+    @Test
+    public void findJsonlTargetLineMatchesUuid() {
+        List<String> lines = Arrays.asList(
+            userLine("uuid-1", "first"),
+            userLine("uuid-2", "second"));
+
+        assertEquals(1, RollbackHandler.findJsonlTargetLine(lines, GSON, "uuid-2", null));
+    }
+
+    @Test
+    public void findJsonlTargetLineFallsBackToUserText() {
+        List<String> lines = Arrays.asList(
+            "{\"type\":\"attachment\",\"uuid\":\"a-1\"}",
+            userLine("uuid-1", "first"),
+            userLine("uuid-2", "second"));
+
+        assertEquals(2, RollbackHandler.findJsonlTargetLine(lines, GSON, null, "second"));
+    }
+
+    @Test
+    public void findJsonlTargetLineMatchesNormalizedUserText() {
+        List<String> lines = Arrays.asList(userLine("uuid-1", "explain this"));
+
+        // Stored content carries trailing blank lines the CLI record does not.
+        assertEquals(0, RollbackHandler.findJsonlTargetLine(lines, GSON, null, "explain this\n\n\n"));
+    }
+
+    @Test
+    public void findJsonlTargetLineSkipsToolResultRecords() {
+        List<String> lines = Arrays.asList(
+            "{\"type\":\"user\",\"uuid\":\"uuid-1\",\"message\":{\"content\":"
+                + "[{\"type\":\"tool_result\",\"tool_use_id\":\"t1\",\"content\":\"output\"}]}}");
+
+        assertEquals(-1, RollbackHandler.findJsonlTargetLine(lines, GSON, null, "output"));
+    }
+
+    @Test
+    public void findJsonlTargetLineReturnsMinusOneWhenMessageNotPersisted() {
+        List<String> lines = Arrays.asList(userLine("uuid-1", "first"));
+
+        assertEquals(-1, RollbackHandler.findJsonlTargetLine(lines, GSON, "uuid-2", "second"));
+    }
+
+    @Test
+    public void findJsonlTargetLineToleratesMalformedLines() {
+        List<String> lines = Arrays.asList("not json", userLine("uuid-1", "first"));
+
+        assertEquals(1, RollbackHandler.findJsonlTargetLine(lines, GSON, null, "first"));
     }
 }
