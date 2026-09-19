@@ -81,26 +81,46 @@ const QuoteButton = memo(function QuoteButton({
   );
 });
 
+/** Rollback icon SVG */
+const RollbackIcon = () => (
+  <svg width="14" height="14" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <path d="M5 3.5L1.5 7L5 10.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+    <path d="M1.5 7L9.5 7C12 7 14 8.5 14 11.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+  </svg>
+);
+
 interface UserMessageHeaderProps {
   messageType: ClaudeMessage['type'];
   timestamp?: string;
+  messageIndex: number;
+  message: ClaudeMessage;
   hasCopyableText: boolean;
   isQuoted: boolean;
   isCopied: boolean;
   onQuote: () => void;
   onCopy: () => void;
+  /** Callback when user clicks the rollback button on a user message */
+  onRollback?: (messageIndex: number, message: ClaudeMessage) => void;
+  /** Whether a rollback operation is currently in progress */
+  isRollingBack?: boolean;
+  streamingActive?: boolean;
   t: TFunction;
 }
 
-/** Timestamp and copy button for user messages */
+/** Timestamp, copy and rollback buttons for user messages */
 export const UserMessageHeader = memo(function UserMessageHeader({
   messageType,
   timestamp,
+  messageIndex,
+  message,
   hasCopyableText,
   isQuoted,
   isCopied,
   onQuote,
   onCopy,
+  onRollback,
+  isRollingBack = false,
+  streamingActive = false,
   t,
 }: UserMessageHeaderProps) {
   if (messageType !== 'user' || !timestamp) return null;
@@ -126,6 +146,22 @@ export const UserMessageHeader = memo(function UserMessageHeader({
             copySuccessText={t('markdown.copySuccess')}
           />
         </>
+      )}
+      {onRollback && !streamingActive && !isRollingBack && (
+        <button
+          type="button"
+          className="message-rollback-btn"
+          onClick={() => onRollback(messageIndex, message)}
+          title={t('rollback.tooltip', 'Rollback to here')}
+          aria-label={t('rollback.tooltip', 'Rollback to here')}
+        >
+          <span className="rollback-icon">
+            <RollbackIcon />
+          </span>
+          <span className="rollback-tooltip">
+            {t('rollback.tooltip', 'Rollback to here')}
+          </span>
+        </button>
       )}
     </div>
   );

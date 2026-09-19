@@ -7,6 +7,7 @@ import {
   useStreamingMessages,
   useWindowCallbacks,
   useRewindHandlers,
+  useRollbackHandlers,
   useHistoryLoader,
   useMessageQueue,
   useMessageProcessing,
@@ -137,6 +138,7 @@ export const useAppChatController = ({
     setSettingsInitialTab,
     addToast, clearToasts,
     setContextInfo,
+    setDraftInput,
   } = useUIState();
 
   const chatInputRef = useRef<ChatInputBoxHandle>(null);
@@ -345,7 +347,7 @@ export const useAppChatController = ({
     getMessageText, getContentBlocks,
   });
 
-  const { handleUndoFile, handleDiscardAll: handleDiscardAllRaw, handleKeepAll } = fileChangeMgmt;
+  const { handleUndoFile, handleDiscardAll: handleDiscardAllRaw, handleKeepAll, resetProcessedFiles } = fileChangeMgmt;
   const onDiscardAll = useCallback(
     () => { handleDiscardAllRaw(filteredFileChanges); },
     [handleDiscardAllRaw, filteredFileChanges],
@@ -373,6 +375,26 @@ export const useAppChatController = ({
     setIsRewinding, isRewinding,
   });
 
+  // ── Rollback handlers ──
+  const {
+    rollbackDialogOpen,
+    currentRollbackRequest,
+    isRollingBack,
+    showRollbackDialog,
+    handleRollbackConfirm,
+    handleRollbackCancel,
+  } = useRollbackHandlers({
+    t,
+    addToast,
+    messages: mergedMessages,
+    getContentBlocks,
+    findToolResult,
+    getMessageText,
+    setDraftInput,
+    resetProcessedFiles,
+    streamingActive,
+  });
+
   return {
     // Computed message data
     sessionTitle, mergedMessages, getMessageText, getContentBlocks,
@@ -392,5 +414,8 @@ export const useAppChatController = ({
     showInterruptConfirm, handleConfirmInterrupt, handleCancelInterrupt,
     // Rewind
     handleRewindSelect, handleRewindSelectCancel, handleRewindConfirm, handleRewindCancel,
+    // Rollback
+    rollbackDialogOpen, currentRollbackRequest, isRollingBack,
+    showRollbackDialog, handleRollbackConfirm, handleRollbackCancel,
   };
 };
