@@ -72,6 +72,8 @@ export interface AppDialogsProps {
   isRollingBack: boolean;
   onRollbackConfirm: () => void;
   onRollbackCancel: () => void;
+  /** Apply the execution mode chosen while approving a Claude plan. */
+  onPlanApprovalModeChange?: (mode: string) => void;
 }
 
 /**
@@ -99,6 +101,7 @@ export const AppDialogs = ({
   isRollingBack,
   onRollbackConfirm,
   onRollbackCancel,
+  onPlanApprovalModeChange,
 }: AppDialogsProps) => {
   const { t } = useTranslation();
   const {
@@ -185,7 +188,10 @@ export const AppDialogs = ({
       <PlanApprovalDialog
         isOpen={planApprovalDialogOpen}
         request={currentPlanApprovalRequest}
-        onApprove={handlePlanApprovalApprove}
+        onApprove={(requestId, targetMode) => {
+          handlePlanApprovalApprove(requestId, targetMode);
+          onPlanApprovalModeChange?.(targetMode);
+        }}
         onReject={handlePlanApprovalReject}
         timeoutSeconds={permissionDialogTimeoutSeconds}
       />

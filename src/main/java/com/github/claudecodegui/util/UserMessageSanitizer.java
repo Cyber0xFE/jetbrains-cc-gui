@@ -12,7 +12,7 @@ public final class UserMessageSanitizer {
     private static final String IMAGE_ATTACHMENT_HINT =
             "The user has attached the image(s) above. Please use the Read tool to view them.";
 
-    private static final String[] SYSTEM_TAG_NAMES = {"agents-instructions", "system-reminder", "system-prompt", "skill"};
+    private static final String[] SYSTEM_TAG_NAMES = {"agents-instructions", "system-reminder", "system-prompt", "skill", "recommended_plugins"};
 
     private static final String[] APPENDED_CONTEXT_MARKERS = {
         "\n\n## Agent Role and Instructions\n\n",
