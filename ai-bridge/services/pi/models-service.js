@@ -8,9 +8,8 @@
 import { spawnSync } from 'child_process';
 import { homedir } from 'os';
 import {
-  commonCliBinDirs,
+  buildCliSpawnEnv,
   decodeCliOutput,
-  enrichPathWithBinDirs,
   resolveCliSpawn,
   resolvePiCliPath,
 } from '../../utils/cli-path.js';
@@ -55,13 +54,23 @@ export function parsePiModelsOutput(stdout) {
 }
 
 /**
+ * Windows `pi.cmd` npm shim launched via `cmd.exe /d /s /c` can route all
+ * output through stderr; prefer the non-empty stream for parsing.
+ * @param {string} stdout
+ * @param {string} stderr
+ * @returns {string}
+ */
+export function pickParseSource(stdout, stderr) {
+  return stdout.trim() ? stdout : stderr;
+}
+
+/**
  * List models available to the local PI CLI.
  * Prints a single JSON object to stdout (for channel-manager listModels).
  */
 export function listModels() {
   const bin = resolvePiCliPath();
-  const env = { ...process.env };
-  enrichPathWithBinDirs(env, commonCliBinDirs(homedir()));
+  const env = buildCliSpawnEnv(bin, homedir());
 
   let result;
   try {
@@ -102,10 +111,7 @@ export function listModels() {
     return;
   }
 
-  // Windows `pi.cmd` npm shim launched via `cmd.exe /d /s /c` can route all
-  // output through stderr; prefer the non-empty stream for parsing.
-  const parseSource = stdout.trim() ? stdout : stderr;
-  const models = parsePiModelsOutput(parseSource);
+  const models = parsePiModelsOutput(pickParseSource(stdout, stderr));
   // Keep a default entry so UI always has a selectable fallback.
   if (models.length === 0) {
     models.push({

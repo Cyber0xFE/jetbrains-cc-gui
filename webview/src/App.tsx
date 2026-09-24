@@ -71,7 +71,7 @@ const App = () => {
     subagentHistoryCtxValue, sessionIdCtxValue,
     chatInputRef, messagesContainerRef, messagesEndRef, inputAreaRef, isAutoScrollingRef,
     handleUndoFile, onDiscardAll, handleKeepAll,
-    handleSubmit, interruptSession, messageQueue, dequeueMessage,
+    handleSubmit, interruptSession, messageQueue, dequeueMessage, reorderMessageQueue,
     handleOpenRewindSelectDialog, handleNavigateToProviderSettings, wrappedHandleProviderSelect,
     createNewSession, loadHistorySession, deleteHistorySession, deleteHistorySessions,
     exportHistorySession, toggleFavoriteSession, updateHistoryTitle, convertToCliSession,
@@ -175,6 +175,7 @@ const App = () => {
           onRemoveFromQueue={dequeueMessage}
           onRollbackUserMessage={showRollbackDialog}
           isRollingBack={isRollingBack}
+          onReorderQueue={reorderMessageQueue}
           onLoadSession={loadHistorySession}
           onDeleteSession={deleteHistorySession}
           onDeleteSessions={deleteHistorySessions}
