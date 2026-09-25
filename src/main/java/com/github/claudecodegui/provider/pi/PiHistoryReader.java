@@ -2,6 +2,7 @@ package com.github.claudecodegui.provider.pi;
 
 import com.github.claudecodegui.bridge.NodeDetector;
 import com.github.claudecodegui.provider.common.HistoryPathMatcher;
+import com.github.claudecodegui.util.UserMessageSanitizer;
 import com.google.gson.Gson;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
@@ -16,6 +17,7 @@ import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.nio.file.StandardCopyOption;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -292,6 +294,103 @@ public class PiHistoryReader {
             }
         }
         return true;
+    }
+
+    /**
+     * Truncate a session file at the given user message, discarding that message and
+     * everything after it — the PI counterpart of rolling a Claude JSONL back.
+     *
+     * <p>The {@code type=session} header on line 1 is always kept: PI rebuilds a fresh
+     * session id when it is missing, which would silently fork the conversation.
+     *
+     * <p>The target is located by entry id first (PI message rows carry an {@code id}),
+     * falling back to normalized text matching on user rows — the same two-step
+     * resolution {@code RollbackHandler} uses for Claude JSONL. A message the CLI has
+     * not persisted yet is not an error: the file is append-only, so what is on disk is
+     * already the correct prefix.
+     *
+     * @return whether the file was rewritten
+     */
+    public boolean truncateAfterUserMessage(String sessionId, String cwd,
+                                            String messageUuid, String messageContent) throws IOException {
+        if (!isSafeSessionId(sessionId)) {
+            return false;
+        }
+        Path file = resolveSessionFile(sessionId, cwd);
+        if (file == null || !Files.isRegularFile(file)) {
+            LOG.warn("[PiHistoryReader] Session file not found for truncation: id=" + sessionId
+                    + " cwd=" + cwd);
+            return false;
+        }
+        List<String> lines = Files.readAllLines(file, StandardCharsets.UTF_8);
+        int targetLine = findUserMessageLine(lines, messageUuid, messageContent);
+        if (targetLine < 0) {
+            LOG.info("[PiHistoryReader] Target message not present in session file, nothing to truncate");
+            return false;
+        }
+        // Atomic write: only the temp file is lost if the process dies mid-write.
+        List<String> truncated = lines.subList(0, targetLine);
+        Path tmpPath = file.resolveSibling(file.getFileName() + ".tmp");
+        Files.write(tmpPath, truncated, StandardCharsets.UTF_8);
+        Files.move(tmpPath, file, StandardCopyOption.ATOMIC_MOVE,
+                StandardCopyOption.REPLACE_EXISTING);
+        LOG.info("[PiHistoryReader] Session truncated: " + lines.size() + " → " + targetLine + " lines");
+        return true;
+    }
+
+    /**
+     * Index of the session line holding the target user message, or -1 when absent.
+     *
+     * <p>Never returns 0 — line 1 is the session header and must survive.
+     * Package-private for testability.
+     */
+    static int findUserMessageLine(List<String> lines, String messageUuid, String messageContent) {
+        if (messageUuid != null && !messageUuid.trim().isEmpty()) {
+            for (int i = lines.size() - 1; i >= 1; i--) {
+                JsonObject obj = parseJsonLine(lines.get(i));
+                if (obj == null || !"message".equals(text(obj, "type"))) {
+                    continue;
+                }
+                if (messageUuid.equals(text(obj, "id"))) {
+                    return i;
+                }
+            }
+        }
+
+        if (messageContent != null && !messageContent.trim().isEmpty()) {
+            for (int i = lines.size() - 1; i >= 1; i--) {
+                JsonObject obj = parseJsonLine(lines.get(i));
+                if (obj == null || !"message".equals(text(obj, "type"))) {
+                    continue;
+                }
+                JsonObject message = obj.has("message") && obj.get("message").isJsonObject()
+                        ? obj.getAsJsonObject("message")
+                        : null;
+                if (message == null || !"user".equals(text(message, "role"))) {
+                    continue;
+                }
+                String lineText = extractTextBlocks(message.get("content"));
+                if (lineText.isBlank()) {
+                    continue;
+                }
+                // Last match wins: when the same text was sent twice, the later message is
+                // the one on screen, and discarding from there onward is the safe pick.
+                if (UserMessageSanitizer.matchesUserText(messageContent, lineText)) {
+                    return i;
+                }
+            }
+        }
+
+        return -1;
+    }
+
+    private static JsonObject parseJsonLine(String line) {
+        try {
+            JsonElement parsed = JsonParser.parseString(line);
+            return parsed.isJsonObject() ? parsed.getAsJsonObject() : null;
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     private Path resolveSessionFile(String sessionId, String cwd) throws IOException {

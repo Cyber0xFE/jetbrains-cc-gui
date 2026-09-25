@@ -2,6 +2,7 @@ package com.github.claudecodegui.handler;
 
 import com.github.claudecodegui.handler.core.BaseMessageHandler;
 import com.github.claudecodegui.handler.core.HandlerContext;
+import com.github.claudecodegui.provider.pi.PiHistoryReader;
 import com.github.claudecodegui.session.ClaudeSession;
 import com.github.claudecodegui.session.MessageParser;
 import com.github.claudecodegui.session.SessionState;
@@ -156,8 +157,12 @@ public class RollbackHandler extends BaseMessageHandler {
                     LOG.warn("[RollbackHandler] Daemon reset failed: " + e.getMessage());
                 }
 
-                // 4. JSONL on disk
-                if (finalKeepCount == 0) {
+                // 4. Session transcript on disk. PI keeps its transcript in its own
+                //    store (~/.pi/agent/sessions/...), so the Claude JSONL paths below
+                //    never resolve for it and the rollback would not stick.
+                if (isPiProvider()) {
+                    rewritePiSessionFile(finalState, finalKeepCount, finalUuid, finalTargetContent);
+                } else if (finalKeepCount == 0) {
                     deleteSessionJsonl(finalState);
                     finalState.setSessionId(null);
                     finalState.setChannelId(null);
@@ -254,6 +259,53 @@ public class RollbackHandler extends BaseMessageHandler {
 
     private static boolean isBlank(String value) {
         return value == null || value.trim().isEmpty();
+    }
+
+    // ── PI session file ─────────────────────────────────────────────────
+
+    /**
+     * Whether the active provider stores its transcript outside the Claude JSONL
+     * layout that {@link #buildJsonlPath} assumes.
+     */
+    private boolean isPiProvider() {
+        return "pi".equals(context.getCurrentProvider());
+    }
+
+    /**
+     * Apply the rollback to the PI session file backing this conversation.
+     *
+     * <p>PI has no per-message rewind, so resetting to the first message deletes the
+     * whole session file. The session id is cleared either way: PI resumes via
+     * {@code --continue} whenever the id is non-empty, which would otherwise reload a
+     * transcript the user just discarded — or, after a delete, resume an unrelated
+     * session in the same cwd.
+     *
+     * @return whether the file was actually rewritten or deleted
+     */
+    private boolean rewritePiSessionFile(SessionState state, int keepCount,
+                                         String messageUuid, String messageContent) {
+        String sessionId = state.getSessionId();
+        if (sessionId == null || sessionId.isEmpty()) {
+            return false;
+        }
+        try {
+            PiHistoryReader reader = new PiHistoryReader();
+            if (keepCount == 0) {
+                boolean deleted = reader.deleteSession(sessionId, state.getCwd());
+                state.setSessionId(null);
+                state.setChannelId(null);
+                state.rotateRuntimeSessionEpoch();
+                LOG.info("[RollbackHandler] PI session reset — sessionId cleared, deleted=" + deleted);
+                return deleted;
+            }
+            boolean truncated = reader.truncateAfterUserMessage(
+                sessionId, state.getCwd(), messageUuid, messageContent);
+            LOG.info("[RollbackHandler] PI session truncated: " + truncated);
+            return truncated;
+        } catch (Exception e) {
+            LOG.warn("[RollbackHandler] PI session update failed: " + e.getMessage());
+            return false;
+        }
     }
 
     // ── JSONL operations ────────────────────────────────────────────────
