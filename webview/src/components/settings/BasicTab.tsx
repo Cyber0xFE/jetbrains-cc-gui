@@ -51,6 +51,8 @@ const BasicTab = ({ themeSync, basicActions, addToast }: BasicTabProps) => {
       onSendShortcutChange={basicActions.handleSendShortcutChange}
       autoOpenFileEnabled={basicActions.autoOpenFileEnabled}
       onAutoOpenFileEnabledChange={basicActions.handleAutoOpenFileEnabledChange}
+      autoSaveFilesEnabled={basicActions.autoSaveFilesEnabled}
+      onAutoSaveFilesEnabledChange={basicActions.handleAutoSaveFilesEnabledChange}
       chatBgColor={themeSync.chatBgColor}
       onChatBgColorChange={themeSync.setChatBgColor}
       userMsgColor={themeSync.userMsgColor}

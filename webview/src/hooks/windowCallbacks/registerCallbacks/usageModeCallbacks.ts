@@ -39,6 +39,7 @@ export function registerUsageModeCallbacks(options: UseWindowCallbacksOptions): 
     setStreamingEnabledSetting,
     setSendShortcut,
     setAutoOpenFileEnabled,
+    setAutoSaveFilesEnabled,
     setPermissionDialogTimeoutSeconds,
     currentProviderRef,
     syncActiveProviderModelMapping,
@@ -222,6 +223,15 @@ export function registerUsageModeCallbacks(options: UseWindowCallbacksOptions): 
       setAutoOpenFileEnabled(data.autoOpenFileEnabled ?? false);
     } catch (error) {
       console.error('[Frontend] Failed to parse auto open file enabled:', error);
+    }
+  };
+
+  window.updateAutoSaveFilesEnabled = (jsonStr: string) => {
+    try {
+      const data = JSON.parse(jsonStr);
+      setAutoSaveFilesEnabled(data.autoSaveFilesEnabled ?? false);
+    } catch (error) {
+      console.error('[Frontend] Failed to parse auto save files enabled:', error);
     }
   };
 

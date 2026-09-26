@@ -38,6 +38,8 @@ export interface UseSettingsBasicActionsProps {
   onSendShortcutChangeProp?: (shortcut: 'enter' | 'cmdEnter') => void;
   autoOpenFileEnabledProp?: boolean;
   onAutoOpenFileEnabledChangeProp?: (enabled: boolean) => void;
+  autoSaveFilesEnabledProp?: boolean;
+  onAutoSaveFilesEnabledChangeProp?: (enabled: boolean) => void;
   permissionDialogTimeoutSecondsProp?: number;
   onPermissionDialogTimeoutChangeProp?: (seconds: number) => void;
   /** Current chat CLI — prompt enhancer auto mode follows this when available. */
@@ -75,6 +77,9 @@ export interface UseSettingsBasicActionsReturn {
   /** Auto open file state (prefers prop over local state) */
   autoOpenFileEnabled: boolean;
   localAutoOpenFileEnabled: boolean;
+  /** Auto save files state (prefers prop over local state) */
+  autoSaveFilesEnabled: boolean;
+  localAutoSaveFilesEnabled: boolean;
   commitPrompt: string;
   savingCommitPrompt: boolean;
   projectCommitPrompt: string;
@@ -114,6 +119,7 @@ export interface UseSettingsBasicActionsReturn {
   handleCodexSandboxModeChange: (mode: 'workspace-write' | 'danger-full-access') => void;
   handleSendShortcutChange: (shortcut: 'enter' | 'cmdEnter') => void;
   handleAutoOpenFileEnabledChange: (enabled: boolean) => void;
+  handleAutoSaveFilesEnabledChange: (enabled: boolean) => void;
   handleSoundNotificationEnabledChange: (enabled: boolean) => void;
   handleSoundOnlyWhenUnfocusedChange: (enabled: boolean) => void;
   handleSelectedSoundChange: (soundId: string) => void;
@@ -167,6 +173,7 @@ export interface UseSettingsBasicActionsReturn {
   /** @internal */ setCodexSandboxMode: (mode: 'workspace-write' | 'danger-full-access') => void;
   /** @internal */ setLocalSendShortcut: (shortcut: 'enter' | 'cmdEnter') => void;
   /** @internal */ setLocalAutoOpenFileEnabled: (enabled: boolean) => void;
+  /** @internal */ setLocalAutoSaveFilesEnabled: (enabled: boolean) => void;
   /** @internal */ setCommitPrompt: (prompt: string) => void;
   /** @internal */ setSavingCommitPrompt: (saving: boolean) => void;
   /** @internal */ setProjectCommitPrompt: (prompt: string) => void;
@@ -196,6 +203,8 @@ export function useSettingsBasicActions({
   onSendShortcutChangeProp,
   autoOpenFileEnabledProp,
   onAutoOpenFileEnabledChangeProp,
+  autoSaveFilesEnabledProp,
+  onAutoSaveFilesEnabledChangeProp,
   permissionDialogTimeoutSecondsProp,
   onPermissionDialogTimeoutChangeProp,
   currentProvider,
@@ -241,6 +250,10 @@ export function useSettingsBasicActions({
   // Auto open file configuration - prefer props, fallback to local state
   const [localAutoOpenFileEnabled, setLocalAutoOpenFileEnabled] = useState<boolean>(false);
   const autoOpenFileEnabled = autoOpenFileEnabledProp ?? localAutoOpenFileEnabled;
+
+  // Auto save files configuration - prefer props, fallback to local state
+  const [localAutoSaveFilesEnabled, setLocalAutoSaveFilesEnabled] = useState<boolean>(false);
+  const autoSaveFilesEnabled = autoSaveFilesEnabledProp ?? localAutoSaveFilesEnabled;
 
   // Commit AI prompt configuration
   const [commitPrompt, setCommitPrompt] = useState('');
@@ -458,6 +471,17 @@ export function useSettingsBasicActions({
       sendToJava(`set_auto_open_file_enabled:${JSON.stringify(payload)}`);
     }
   }, [onAutoOpenFileEnabledChangeProp]);
+
+  // Auto save files toggle change handler
+  const handleAutoSaveFilesEnabledChange = useCallback((enabled: boolean) => {
+    if (onAutoSaveFilesEnabledChangeProp) {
+      onAutoSaveFilesEnabledChangeProp(enabled);
+    } else {
+      setLocalAutoSaveFilesEnabled(enabled);
+      const payload = { autoSaveFilesEnabled: enabled };
+      sendToJava(`set_auto_save_files_enabled:${JSON.stringify(payload)}`);
+    }
+  }, [onAutoSaveFilesEnabledChangeProp]);
 
   // Sound notification toggle change handler
   const handleSoundNotificationEnabledChange = useCallback((enabled: boolean) => {
@@ -777,6 +801,9 @@ export function useSettingsBasicActions({
     localAutoOpenFileEnabled,
     setLocalAutoOpenFileEnabled,
     autoOpenFileEnabled,
+    localAutoSaveFilesEnabled,
+    setLocalAutoSaveFilesEnabled,
+    autoSaveFilesEnabled,
     commitPrompt,
     setCommitPrompt,
     savingCommitPrompt,
@@ -808,6 +835,7 @@ export function useSettingsBasicActions({
     handleCodexSandboxModeChange,
     handleSendShortcutChange,
     handleAutoOpenFileEnabledChange,
+    handleAutoSaveFilesEnabledChange,
     handleSoundNotificationEnabledChange,
     handleSoundOnlyWhenUnfocusedChange,
     handleSelectedSoundChange,

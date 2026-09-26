@@ -14,6 +14,8 @@ interface AppSettingsOverlayProps {
   onSendShortcutChange?: (shortcut: 'enter' | 'cmdEnter') => void;
   autoOpenFileEnabled?: boolean;
   onAutoOpenFileEnabledChange?: (enabled: boolean) => void;
+  autoSaveFilesEnabled?: boolean;
+  onAutoSaveFilesEnabledChange?: (enabled: boolean) => void;
   permissionDialogTimeoutSeconds?: number;
   onPermissionDialogTimeoutChange?: (seconds: number) => void;
 }

@@ -103,6 +103,8 @@ const App = () => {
           onSendShortcutChange={model.handleSendShortcutChange}
           autoOpenFileEnabled={model.autoOpenFileEnabled}
           onAutoOpenFileEnabledChange={model.handleAutoOpenFileEnabledChange}
+          autoSaveFilesEnabled={model.autoSaveFilesEnabled}
+          onAutoSaveFilesEnabledChange={model.handleAutoSaveFilesEnabledChange}
           permissionDialogTimeoutSeconds={permissionDialogTimeoutSeconds}
           onPermissionDialogTimeoutChange={setPermissionDialogTimeoutSeconds}
         />

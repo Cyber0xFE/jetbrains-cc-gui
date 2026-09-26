@@ -66,6 +66,7 @@ export interface ChatControllerModelSlice {
   setStreamingEnabledSetting: UseWindowCallbacksOptions['setStreamingEnabledSetting'];
   setSendShortcut: UseWindowCallbacksOptions['setSendShortcut'];
   setAutoOpenFileEnabled: UseWindowCallbacksOptions['setAutoOpenFileEnabled'];
+  setAutoSaveFilesEnabled: UseWindowCallbacksOptions['setAutoSaveFilesEnabled'];
   setSdkStatus: UseWindowCallbacksOptions['setSdkStatus'];
   setSdkStatusLoaded: UseWindowCallbacksOptions['setSdkStatusLoaded'];
   setSdkStatusError: UseWindowCallbacksOptions['setSdkStatusError'];
@@ -157,7 +158,7 @@ export const useAppChatController = ({
     setLongContextEnabled, setReasoningEffort, setCodexFastMode,
     setProviderConfigVersion, setActiveProviderConfig,
     setClaudeSettingsAlwaysThinkingEnabled, setStreamingEnabledSetting,
-    setSendShortcut, setAutoOpenFileEnabled,
+    setSendShortcut, setAutoOpenFileEnabled, setAutoSaveFilesEnabled,
     setSdkStatus, setSdkStatusLoaded, setSdkStatusError, setSelectedAgent,
     setUsagePercentage, setUsageUsedTokens, setUsageMaxTokens,
   } = model;
@@ -224,7 +225,7 @@ export const useAppChatController = ({
     setLongContextEnabled, setReasoningEffort, setCodexFastMode,
     setProviderConfigVersion, setActiveProviderConfig,
     setClaudeSettingsAlwaysThinkingEnabled, setStreamingEnabledSetting,
-    setSendShortcut, setAutoOpenFileEnabled,
+    setSendShortcut, setAutoOpenFileEnabled, setAutoSaveFilesEnabled,
     setSdkStatus, setSdkStatusLoaded, setSdkStatusError,
     setIsRewinding, setRewindDialogOpen, setCurrentRewindRequest,
     setContextInfo, setSelectedAgent,
