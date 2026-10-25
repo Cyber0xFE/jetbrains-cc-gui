@@ -762,7 +762,7 @@ public class ChatWindowDelegate {
                         + e.getMessage());
             }
         }
-        return SettingsHandler.getModelContextLimit(resolvedModel);
+        return ModelProviderHandler.getClaudeContextLimit(resolvedModel);
     }
 
     private void replayCurrentSessionStateToFrontend() {
