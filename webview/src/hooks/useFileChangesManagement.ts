@@ -7,6 +7,8 @@ export interface UseFileChangesManagementOptions {
   currentSessionId: string | null;
   currentSessionIdRef: RefObject<string | null>;
   messages: ClaudeMessage[];
+  currentProvider?: string;
+  fileChangesRef?: RefObject<FileChange[]>;
   getContentBlocks: (message: ClaudeMessage) => any[];
   findToolResult: (toolUseId?: string, messageIndex?: number) => ToolResultBlock | null;
 }
@@ -14,6 +16,16 @@ export interface UseFileChangesManagementOptions {
 export interface FileChange {
   filePath: string;
   [key: string]: any;
+}
+
+function readReviewCheckpoint(storageKey: string): string[] {
+  try {
+    const entries = JSON.parse(localStorage.getItem(storageKey) ?? '[]');
+    return Array.isArray(entries) && entries.every(entry => typeof entry === 'string') ? entries : [];
+  } catch {
+    // An unreadable checkpoint cannot prove that an operation was reviewed.
+    return [];
+  }
 }
 
 /**
@@ -24,81 +36,126 @@ export function useFileChangesManagement({
   currentSessionId,
   currentSessionIdRef,
   messages,
+  currentProvider = 'claude',
+  fileChangesRef,
 }: UseFileChangesManagementOptions) {
   // List of processed file paths (filtered from fileChanges after Apply/Reject, persisted to localStorage)
   const [processedFiles, setProcessedFiles] = useState<string[]>([]);
   // Base message index (for Keep All feature, only counts changes after this index)
   const [baseMessageIndex, setBaseMessageIndex] = useState(0);
+  const [ignoredLedgerKeys, setIgnoredLedgerKeys] = useState<string[]>([]);
+  const ignoredKeysRef = useRef<string[]>([]);
+  const reviewChanges = useCallback((files: FileChange[], sessionId: string | null = currentSessionId) => {
+    const keys = files.flatMap(file => (file.operations ?? []).map((op: { ledgerKey?: string }) => op.ledgerKey).filter(Boolean));
+    const targetsCurrent = currentProvider === 'codex' && sessionId === currentSessionId;
+    const previous = targetsCurrent ? ignoredKeysRef.current
+      : sessionId ? readReviewCheckpoint(`codex-reviewed-edits-${sessionId}`) : [];
+    const next = [...new Set<string>([...previous, ...keys])];
+    if (targetsCurrent) {
+      ignoredKeysRef.current = next;
+      setIgnoredLedgerKeys(next);
+    }
+    if (sessionId) {
+      try { localStorage.setItem(`codex-reviewed-edits-${sessionId}`, JSON.stringify(next)); } catch { /* Private storage. */ }
+    }
+  }, [currentProvider, currentSessionId]);
 
   // Ref to always hold the latest messages array, avoiding stale closure issues
   // in handleKeepAll when messages.length changes between renders.
   const messagesRef = useRef(messages);
-  messagesRef.current = messages;
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
+
+  // Ref to always hold the latest processedFiles list, so handlers can compute
+  // and persist the next list outside of the state updater.
+  const processedFilesRef = useRef(processedFiles);
+  useEffect(() => {
+    processedFilesRef.current = processedFiles;
+  }, [processedFiles]);
 
   // Callback after file undo success (triggered from StatusPanel)
-  const handleUndoFile = useCallback((filePath: string) => {
-    setProcessedFiles(prev => {
-      if (prev.includes(filePath)) return prev;
-      const newList = [...prev, filePath];
+  const handleUndoFile = useCallback((filePath: string, reviewedKeys?: string[], origin?: {
+    sessionId: string | null; provider: string;
+  }) => {
+    const sessionId = origin ? origin.sessionId : currentSessionId;
+    const provider = origin?.provider ?? currentProvider;
+    const targetsCurrent = sessionId === currentSessionId && provider === currentProvider;
+    if (provider === 'codex') {
+      reviewChanges(reviewedKeys ? [{ filePath, operations: reviewedKeys.map(ledgerKey => ({ ledgerKey })) }]
+        : targetsCurrent ? (fileChangesRef?.current ?? []).filter(file => file.filePath === filePath) : [], sessionId);
+      return;
+    }
+    const prev = targetsCurrent ? processedFilesRef.current
+      : sessionId ? readReviewCheckpoint(`processed-files-${sessionId}`) : [];
+    if (prev.includes(filePath)) return;
+    const newList = [...prev, filePath];
 
-      // Persist to localStorage
-      if (currentSessionId) {
-        try {
-          localStorage.setItem(
-            `processed-files-${currentSessionId}`,
-            JSON.stringify(newList)
-          );
-        } catch (e) {
-          console.error('Failed to persist processed files:', e);
-        }
+    if (targetsCurrent) {
+      processedFilesRef.current = newList;
+      setProcessedFiles(newList);
+    }
+
+    // Persist to localStorage
+    if (sessionId) {
+      try {
+        localStorage.setItem(
+          `processed-files-${sessionId}`,
+          JSON.stringify(newList)
+        );
+      } catch (e) {
+        console.error('Failed to persist processed files:', e);
       }
-
-      return newList;
-    });
-  }, [currentSessionId]);
+    }
+  }, [currentSessionId, currentProvider, fileChangesRef, reviewChanges]);
 
   // Helper to add a file to the processed list with localStorage persistence
   const addFileToProcessed = useCallback((filePath: string) => {
-    setProcessedFiles(prev => {
-      if (prev.includes(filePath)) return prev;
-      const newList = [...prev, filePath];
+    if (currentProvider === 'codex') {
+      reviewChanges((fileChangesRef?.current ?? []).filter(file => file.filePath === filePath));
+      return;
+    }
+    const prev = processedFilesRef.current;
+    if (prev.includes(filePath)) return;
+    const newList = [...prev, filePath];
 
-      const sessionId = currentSessionIdRef.current;
-      if (sessionId) {
-        try {
-          localStorage.setItem(
-            `processed-files-${sessionId}`,
-            JSON.stringify(newList)
-          );
-        } catch (e) {
-          console.error('Failed to persist processed files:', e);
-        }
+    processedFilesRef.current = newList;
+    setProcessedFiles(newList);
+
+    const sessionId = currentSessionIdRef.current;
+    if (sessionId) {
+      try {
+        localStorage.setItem(
+          `processed-files-${sessionId}`,
+          JSON.stringify(newList)
+        );
+      } catch (e) {
+        console.error('Failed to persist processed files:', e);
       }
-
-      return newList;
-    });
-  }, [currentSessionIdRef]);
+    }
+  }, [currentSessionIdRef, currentProvider, fileChangesRef, reviewChanges]);
 
   // Callback after batch undo success (Discard All)
   const handleDiscardAll = useCallback((filteredFileChanges: FileChange[]) => {
-    setProcessedFiles(prev => {
-      const filesToAdd = filteredFileChanges.map(fc => fc.filePath);
-      const newList = [...prev, ...filesToAdd.filter(f => !prev.includes(f))];
+    if (currentProvider === 'codex') { reviewChanges(filteredFileChanges); return; }
+    const prev = processedFilesRef.current;
+    const filesToAdd = filteredFileChanges.map(fc => fc.filePath);
+    const newList = [...prev, ...filesToAdd.filter(f => !prev.includes(f))];
 
-      if (currentSessionId) {
-        try {
-          localStorage.setItem(
-            `processed-files-${currentSessionId}`,
-            JSON.stringify(newList)
-          );
-        } catch (e) {
-          console.error('Failed to persist processed files:', e);
-        }
+    processedFilesRef.current = newList;
+    setProcessedFiles(newList);
+
+    if (currentSessionId) {
+      try {
+        localStorage.setItem(
+          `processed-files-${currentSessionId}`,
+          JSON.stringify(newList)
+        );
+      } catch (e) {
+        console.error('Failed to persist processed files:', e);
       }
-
-      return newList;
-    });
-  }, [currentSessionId]);
+    }
+  }, [currentSessionId, currentProvider, reviewChanges]);
 
   // Reset processed files state (used after rollback)
   const resetProcessedFiles = useCallback(() => {
@@ -114,9 +171,11 @@ export function useFileChangesManagement({
 
   // Callback for Keep All - set current changes as the new baseline (ledger rebuilds from index)
   const handleKeepAll = useCallback(() => {
+    if (currentProvider === 'codex') { reviewChanges(fileChangesRef?.current ?? []); return; }
     // Use ref to get the latest messages.length, avoiding stale closure issues
     const newBaseIndex = messagesRef.current.length;
     setBaseMessageIndex(newBaseIndex);
+    processedFilesRef.current = [];
     setProcessedFiles([]);
 
     if (currentSessionId) {
@@ -128,7 +187,7 @@ export function useFileChangesManagement({
         console.error('Failed to persist Keep All state:', e);
       }
     }
-  }, [currentSessionId]);
+  }, [currentSessionId, currentProvider, fileChangesRef, reviewChanges]);
 
   // Register window callbacks for editable diff operations from Java backend
   useEffect(() => {
@@ -157,7 +216,11 @@ export function useFileChangesManagement({
         }
 
         if (action === 'APPLY' || action === 'REJECT') {
-          addFileToProcessed(filePath);
+          if (Object.prototype.hasOwnProperty.call(data, 'sessionId')) {
+            handleUndoFile(filePath, data.ledgerKeys, { sessionId: data.sessionId, provider: data.provider });
+          } else {
+            addFileToProcessed(filePath);
+          }
           debugLog(`[InteractiveDiff] ${action} changes to:`, filePath);
         }
       } catch {
@@ -169,14 +232,24 @@ export function useFileChangesManagement({
       delete window.handleRemoveFileFromEdits;
       delete window.handleDiffResult;
     };
-  }, [addFileToProcessed]);
+  }, [addFileToProcessed, handleUndoFile]);
 
   // Restore/reset state on session switch
   useEffect(() => {
+    processedFilesRef.current = [];
     setProcessedFiles([]);
+    ignoredKeysRef.current = [];
+    setIgnoredLedgerKeys([]);
 
     if (!currentSessionId) {
       setBaseMessageIndex(0);
+      return;
+    }
+    if (currentProvider === 'codex') {
+      setBaseMessageIndex(0);
+      const keys = readReviewCheckpoint(`codex-reviewed-edits-${currentSessionId}`);
+      ignoredKeysRef.current = keys;
+      setIgnoredLedgerKeys(keys);
       return;
     }
 
@@ -201,6 +274,7 @@ export function useFileChangesManagement({
       if (savedProcessedFiles) {
         const files = JSON.parse(savedProcessedFiles);
         if (Array.isArray(files)) {
+          processedFilesRef.current = files;
           setProcessedFiles(files);
         }
       }
@@ -223,11 +297,12 @@ export function useFileChangesManagement({
     }
 
     setBaseMessageIndex(0);
-  }, [currentSessionId]);
+  }, [currentSessionId, currentProvider]);
 
   return {
     processedFiles,
     baseMessageIndex,
+    ignoredLedgerKeys,
     handleUndoFile,
     handleDiscardAll,
     handleKeepAll,

@@ -4,6 +4,8 @@ import { useSettingsBasicActions } from './useSettingsBasicActions';
 import type { CommitAiConfig } from '../../../types/aiFeatureConfig';
 import { DEFAULT_AI_FEATURE_MODELS } from '../../../types/aiFeatureConfig';
 import type { CodeFontConfig } from '../../../types/uiFontConfig';
+import { BASH_GROUP_COLLAPSED_KEY } from '../../../utils/bashGroupCollapsePreference';
+import { EDIT_GROUP_COLLAPSED_KEY } from '../../../utils/editGroupCollapsePreference';
 
 describe('useSettingsBasicActions', () => {
   const defaultCommitAiConfig: CommitAiConfig = {
@@ -19,11 +21,60 @@ describe('useSettingsBasicActions', () => {
       opencode: false,
       pi: false,
       omp: false,
+      minimax: false,
+      zcode: false,
     },
   };
 
   beforeEach(() => {
     window.sendToJava = vi.fn();
+    localStorage.removeItem(BASH_GROUP_COLLAPSED_KEY);
+    localStorage.removeItem(EDIT_GROUP_COLLAPSED_KEY);
+  });
+
+  it('persists the batch collapse preference across settings remounts and syncs consumers', () => {
+    const first = renderHook(() => useSettingsBasicActions({}));
+    const second = renderHook(() => useSettingsBasicActions({}));
+    expect(first.result.current.bashGroupCollapsedByDefault).toBe(false);
+
+    act(() => first.result.current.handleBashGroupCollapsedByDefaultChange(true));
+    expect(first.result.current.bashGroupCollapsedByDefault).toBe(true);
+    expect(second.result.current.bashGroupCollapsedByDefault).toBe(true);
+    expect(localStorage.getItem(BASH_GROUP_COLLAPSED_KEY)).toBe('true');
+
+    first.unmount();
+    const reopened = renderHook(() => useSettingsBasicActions({}));
+    expect(reopened.result.current.bashGroupCollapsedByDefault).toBe(true);
+
+    act(() => reopened.result.current.handleBashGroupCollapsedByDefaultChange(false));
+    expect(reopened.result.current.bashGroupCollapsedByDefault).toBe(false);
+    expect(second.result.current.bashGroupCollapsedByDefault).toBe(false);
+    expect(localStorage.getItem(BASH_GROUP_COLLAPSED_KEY)).toBeNull();
+  });
+
+  it('persists the batch edit preference independently and syncs settings consumers', () => {
+    const first = renderHook(() => useSettingsBasicActions({}));
+    const second = renderHook(() => useSettingsBasicActions({}));
+    expect(first.result.current.editGroupCollapsedByDefault).toBe(false);
+    const diffExpandedBefore = first.result.current.diffExpandedByDefault;
+
+    act(() => first.result.current.handleEditGroupCollapsedByDefaultChange(true));
+    expect(second.result.current.editGroupCollapsedByDefault).toBe(true);
+    expect(localStorage.getItem(EDIT_GROUP_COLLAPSED_KEY)).toBe('true');
+    expect(first.result.current.bashGroupCollapsedByDefault).toBe(false);
+    expect(first.result.current.diffExpandedByDefault).toBe(diffExpandedBefore);
+
+    act(() => first.result.current.handleBashGroupCollapsedByDefaultChange(true));
+    expect(first.result.current.editGroupCollapsedByDefault).toBe(true);
+
+    first.unmount();
+    const reopened = renderHook(() => useSettingsBasicActions({}));
+    expect(reopened.result.current.editGroupCollapsedByDefault).toBe(true);
+
+    act(() => reopened.result.current.handleEditGroupCollapsedByDefaultChange(false));
+    expect(second.result.current.editGroupCollapsedByDefault).toBe(false);
+    expect(reopened.result.current.bashGroupCollapsedByDefault).toBe(true);
+    expect(localStorage.getItem(EDIT_GROUP_COLLAPSED_KEY)).toBeNull();
   });
 
   it('updates commit AI provider without mutating prompt enhancer state', () => {
@@ -118,6 +169,8 @@ describe('useSettingsBasicActions', () => {
           opencode: false,
           pi: false,
           omp: false,
+          minimax: false,
+          zcode: false,
         },
       });
     });
@@ -148,6 +201,8 @@ describe('useSettingsBasicActions', () => {
           opencode: false,
           pi: false,
           omp: false,
+          minimax: false,
+          zcode: false,
         },
       });
     });
@@ -181,6 +236,8 @@ describe('useSettingsBasicActions', () => {
           opencode: false,
           pi: false,
           omp: false,
+          minimax: false,
+          zcode: false,
         },
       });
     });
@@ -212,6 +269,8 @@ describe('useSettingsBasicActions', () => {
           opencode: false,
           pi: false,
           omp: false,
+          minimax: false,
+          zcode: false,
         },
       });
     });

@@ -9,13 +9,10 @@
  * - Related file information
  */
 
-import { pathToFileURL } from 'node:url';
-
 import {
   loadClaudeSdk,
   isClaudeSdkAvailable,
-  loadCodexSdk,
-  isCodexSdkAvailable,
+  getCodexCliStatus,
 } from '../utils/sdk-loader.js';
 import {
   setupApiKey,
@@ -24,15 +21,14 @@ import {
   loadClaudeSettings,
   getCliUserAgent,
 } from '../config/api-config.js';
-import { mapModelIdToSdkName, resolveModelFromSettings } from '../utils/model-utils.js';
-import { getRealHomeDir } from '../utils/path-utils.js';
+import { resolveModelFromSettings, resolveSdkModelName } from '../utils/model-utils.js';
+import { getRealHomeDir, isMainEntryModule } from '../utils/path-utils.js';
 import { getClaudeCliPathOverride } from '../utils/claude-cli-path.js';
 import { ensureAnthropicSdk } from './claude/message-utils.js';
-import { buildCodexCliEnvironment } from './codex/codex-utils.js';
+import { generateCodexText } from './codex/codex-text-service.js';
 import { askCliProvider, isCliAskProvider } from './cli-ask.js';
 
 let claudeSdk = null;
-let codexSdk = null;
 
 // stdout protocol markers (line-oriented; keep payloads JSON-encoded for deltas)
 //   [CONTENT_DELTA] <json-string>  — progressive token chunk
@@ -40,8 +36,8 @@ let codexSdk = null;
 //   [ENHANCED_ERROR]<msg>          — final failure
 
 /** Mirrors chat AVAILABLE_PROVIDERS / webview AiFeatureProvider. */
-const AI_FEATURE_PROVIDERS = ['claude', 'codex', 'grok', 'kimi', 'opencode', 'pi', 'omp'];
-const CLI_ONLY_PROVIDERS = new Set(['grok', 'kimi', 'opencode', 'pi', 'omp']);
+const AI_FEATURE_PROVIDERS = ['claude', 'codex', 'grok', 'kimi', 'opencode', 'pi', 'omp', 'minimax'];
+const CLI_ONLY_PROVIDERS = new Set(['grok', 'kimi', 'opencode', 'pi', 'omp', 'minimax']);
 
 const DEFAULT_PROMPT_ENHANCER_CONFIG = {
   provider: null,
@@ -56,6 +52,7 @@ const DEFAULT_PROMPT_ENHANCER_CONFIG = {
     opencode: 'opencode-default',
     pi: 'auto',
     omp: 'auto',
+    minimax: 'auto',
   },
   availability: {
     claude: false,
@@ -65,6 +62,7 @@ const DEFAULT_PROMPT_ENHANCER_CONFIG = {
     opencode: false,
     pi: false,
     omp: false,
+    minimax: false,
   },
 };
 
@@ -82,18 +80,6 @@ async function ensureClaudeSdk() {
     claudeSdk = await loadClaudeSdk();
   }
   return claudeSdk;
-}
-
-async function ensureCodexSdk() {
-  if (!codexSdk) {
-    if (!isCodexSdkAvailable()) {
-      const error = new Error('Codex SDK not installed. Please install via Settings > Dependencies.');
-      error.code = 'SDK_NOT_INSTALLED';
-      throw error;
-    }
-    codexSdk = await loadCodexSdk();
-  }
-  return codexSdk;
 }
 
 // Context length limits (in characters) to avoid exceeding model token limits
@@ -334,7 +320,7 @@ export function resolvePromptEnhancerRuntimeConfig({
 
   const config = normalizePromptEnhancerConfig(promptEnhancerConfig);
   const claudeSdkInstalled = isClaudeSdkAvailable();
-  const codexSdkInstalled = isCodexSdkAvailable();
+  const codexCliInstalled = getCodexCliStatus().status === 'resolved';
 
   // Prefer Java-resolved effectiveProvider (includes CLI providers when available).
   if (isAiFeatureProvider(config.effectiveProvider)) {
@@ -354,8 +340,8 @@ export function resolvePromptEnhancerRuntimeConfig({
   }
 
   if (config.provider === 'codex') {
-    if (!codexSdkInstalled) {
-      throw new Error('Codex prompt enhancer is unavailable because the Codex SDK is not installed. Please install it in Settings > Dependencies.');
+    if (!codexCliInstalled) {
+      throw new Error('Codex prompt enhancer is unavailable because the Codex CLI is not detected. Install it and re-check Provider Management > CLI.');
     }
     throw new Error('Codex prompt enhancer is unavailable because no active Codex provider is configured.');
   }
@@ -373,8 +359,8 @@ export function resolvePromptEnhancerRuntimeConfig({
     );
   }
 
-  if (!codexSdkInstalled && !claudeSdkInstalled) {
-    throw new Error('No available prompt enhancer provider is configured because both Claude Code and Codex SDKs are not installed.');
+  if (!codexCliInstalled && !claudeSdkInstalled) {
+    throw new Error('No available prompt enhancer provider is configured. Install the Claude Code SDK or the Codex CLI.');
   }
 
   throw new Error('No available prompt enhancer provider is configured. Please configure a provider in Settings → Prompt Enhancer.');
@@ -420,6 +406,25 @@ export function emitContentDelta(text) {
 }
 
 /**
+ * Build the messages.stream() request for the Claude ask path.
+ * thinking is disabled so reasoning models (e.g. DeepSeek via relay) do not
+ * spend the token budget on `thinking` blocks and leave the text empty.
+ * Exposed for tests.
+ */
+export function buildEnhanceAskRequest(modelId, fullPrompt, systemPrompt, maxTokens) {
+  const request = {
+    model: modelId,
+    max_tokens: maxTokens,
+    thinking: { type: 'disabled' },
+    messages: [{ role: 'user', content: fullPrompt }],
+  };
+  if (systemPrompt && String(systemPrompt).trim()) {
+    request.system = String(systemPrompt).trim();
+  }
+  return request;
+}
+
+/**
  * Fast Claude path: Anthropic SDK messages.stream (no Agent SDK cold start).
  * Native SSE token streaming via .on('text').
  */
@@ -444,7 +449,14 @@ async function enhancePromptWithClaudeAsk(originalPrompt, systemPrompt, model, c
 
   const clientOpts = {
     baseURL: config.baseUrl || undefined,
-    defaultHeaders: { 'x-app': 'cli', 'User-Agent': getCliUserAgent() },
+    // Some relays (e.g. OpenCode Go reached through a local proxy) route requests by
+    // session and answer 400 MissingSessionID without a session header. This call has no
+    // real session to forward, and the value only has to be non-empty to satisfy them.
+    defaultHeaders: {
+      'x-app': 'cli',
+      'User-Agent': getCliUserAgent(),
+      'x-opencode-session': 'ccgui-prompt-enhancer',
+    },
   };
   if (config.authType === 'auth_token') {
     clientOpts.authToken = config.apiKey;
@@ -454,34 +466,22 @@ async function enhancePromptWithClaudeAsk(originalPrompt, systemPrompt, model, c
   }
   const client = new Anthropic(clientOpts);
 
-  console.log('[PromptEnhancer] Streaming via Anthropic SDK messages.stream()...');
+  console.log('[PromptEnhancer] Streaming via Anthropic SDK messages.create({stream: true})...');
 
   let streamedText = '';
-  const request = {
-    model: modelId,
-    max_tokens: maxTokens,
-    messages: [{ role: 'user', content: fullPrompt }],
-  };
-  if (systemPrompt && String(systemPrompt).trim()) {
-    request.system = String(systemPrompt).trim();
-  }
-
-  const stream = client.messages.stream(request);
-  stream.on('text', (text) => {
-    if (text) {
-      emitContentDelta(text);
-      streamedText += text;
-    }
+  // Not messages.stream(): its message accumulator assumes the official SSE shape and
+  // throws "Cannot read properties of undefined (reading 'push')" when an upstream omits
+  // `content` from message_start (observed on OpenCode Go behind a local proxy). Iterating
+  // the raw events only needs the deltas we care about, and ignores thinking blocks.
+  const stream = await client.messages.create({
+    ...buildEnhanceAskRequest(modelId, fullPrompt, systemPrompt, maxTokens),
+    stream: true,
   });
 
-  const finalMessage = await stream.finalMessage();
-
-  if (!streamedText.trim() && finalMessage && Array.isArray(finalMessage.content)) {
-    for (const block of finalMessage.content) {
-      if (block && block.type === 'text' && block.text) {
-        emitContentDelta(block.text);
-        streamedText += block.text;
-      }
+  for await (const event of stream) {
+    if (event.type === 'content_block_delta' && event.delta && event.delta.type === 'text_delta' && event.delta.text) {
+      emitContentDelta(event.delta.text);
+      streamedText += event.delta.text;
     }
   }
 
@@ -504,7 +504,9 @@ async function enhancePromptWithClaudeAgent(originalPrompt, systemPrompt, model,
   console.log(`[PromptEnhancer] Auth type: ${config.authType}`);
   console.log(`[PromptEnhancer] Base URL: ${config.baseUrl || 'https://api.anthropic.com'}`);
 
-  const sdkModelName = mapModelIdToSdkName(model);
+  // Exact id, not the family alias - see resolveSdkModelName.
+  const enhancerSettings = loadClaudeSettings();
+  const sdkModelName = resolveSdkModelName(model, resolveModelFromSettings(model, enhancerSettings && enhancerSettings.env));
   console.log(`[PromptEnhancer] Claude Agent model mapping: ${model} -> ${sdkModelName}`);
 
   const workingDirectory = getRealHomeDir();
@@ -521,6 +523,8 @@ async function enhancePromptWithClaudeAgent(originalPrompt, systemPrompt, model,
     model: sdkModelName,
     maxTurns: 1,
     env: buildCliEnv(),
+    // settingsEnv is deliberately omitted: this call runs maxTurns: 1 with a deny-all
+    // canUseTool, so it never spawns a subagent and tier resolution cannot apply here.
     settings: buildWebviewControlledSettingsOverride(model),
     systemPrompt,
     settingSources: ['user'],
@@ -603,68 +607,12 @@ async function enhancePromptWithClaude(originalPrompt, systemPrompt, model, cont
 }
 
 async function enhancePromptWithCodex(originalPrompt, systemPrompt, model, context) {
-  const sdk = await ensureCodexSdk();
-  const Codex = sdk.Codex || sdk.default || sdk;
-  const { cliEnv } = buildCodexCliEnvironment(process.env);
-  const codex = new Codex({ env: cliEnv });
-
-  const workingDirectory = getRealHomeDir();
-  const systemPromptText = (systemPrompt || '').trim();
-  const fullPrompt = [
-    systemPromptText,
-    '',
-    buildFullPrompt(originalPrompt, context),
-    '',
-    'Remember: output only the optimized prompt text with no explanation.',
-  ].join('\n');
-  console.log(`[PromptEnhancer] Full prompt length: ${fullPrompt.length}`);
-
-  const thread = codex.startThread({
-    skipGitRepoCheck: true,
-    maxTurns: 1,
-    workingDirectory,
-    model,
-    sandboxMode: 'read-only',
-    approvalPolicy: 'never',
+  console.log(`[PromptEnhancer] Calling Codex app-server with model: ${model}`);
+  return generateCodexText({
+    prompt: buildFullPrompt(originalPrompt, context), model, onDelta: emitContentDelta,
+    developerInstructions: [(systemPrompt || '').trim(), 'Output only the optimized prompt text with no explanation.']
+      .filter(Boolean).join('\n\n'),
   });
-
-  console.log(`[PromptEnhancer] Calling Codex SDK with model: ${model}`);
-
-  const { events } = await thread.runStreamed(fullPrompt);
-  let responseText = '';
-  let lastAgentMessage = '';
-
-  for await (const event of events) {
-    console.log(`[PromptEnhancer] Codex event: ${event.type}`);
-    if (event.type === 'item.updated' || event.type === 'item.completed') {
-      const item = event.item;
-      if (item?.type === 'agent_message' && typeof item.text === 'string') {
-        const delta = extractAppendedDelta(lastAgentMessage, item.text);
-        if (delta) {
-          emitContentDelta(delta);
-          responseText += delta;
-        }
-        lastAgentMessage = item.text;
-      }
-      continue;
-    }
-
-    if (event.type === 'turn.failed') {
-      throw new Error(event.error?.message || 'Codex enhancement turn failed');
-    }
-
-    if (event.type === 'error') {
-      throw new Error(event.message || 'Codex enhancement failed');
-    }
-  }
-
-  const finalText = responseText.trim() || lastAgentMessage.trim();
-  console.log(`[PromptEnhancer] Codex response text length: ${finalText.length}`);
-  if (finalText) {
-    return finalText;
-  }
-
-  throw new Error('Codex enhancement response is empty');
 }
 
 /**
@@ -779,6 +727,6 @@ async function main() {
   }
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (isMainEntryModule(import.meta.url)) {
   main();
 }

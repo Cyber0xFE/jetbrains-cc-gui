@@ -1,12 +1,10 @@
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { TFunction } from 'i18next';
 import { sendBridgeEvent } from '../utils/bridge';
 import {
   apply1MContextSuffix,
   isValidDshPreset,
   isValidPermissionMode,
-  normalizeClaudeModelId,
-  strip1MContextSuffix,
 } from '../components/ChatInputBox/types';
 import type { PermissionMode } from '../components/ChatInputBox/types';
 import { isSpecialProviderId } from '../types/provider';
@@ -14,15 +12,32 @@ import { useClaudeProvider } from './providers/useClaudeProvider';
 import { useCodexProvider } from './providers/useCodexProvider';
 import { useGrokProvider } from './providers/useGrokProvider';
 import { useKimiProvider } from './providers/useKimiProvider';
+import { useMiniMaxProvider } from './providers/useMiniMaxProvider';
+import { useZcodeProvider } from './providers/useZcodeProvider';
 import { useOpenCodeProvider } from './providers/useOpenCodeProvider';
 import { usePiProvider } from './providers/usePiProvider';
 import { useOmpProvider } from './providers/useOmpProvider';
-import { isCliOnlyProvider, normalizeCliPermissionMode, ompModeForModelId } from './providers/cliProviders';
+import { isCliOnlyProvider } from './providers/cliProviders';
 import { useOmpRoles } from './providers/useCliModels';
 import { useDshProvider } from './providers/useDshProvider';
 import { useUsageTracking } from './providers/useUsageTracking';
 import { useProviderSettings } from './providers/useProviderSettings';
 import { useModelStatePersistence } from './providers/useModelStatePersistence';
+import {
+  applyCliModeSelect,
+  applyModelSelect,
+  buildThinkingUpdatePayload,
+  deriveCodexAccessScopeFromMode,
+  effectiveCodexSandboxFromSettings,
+  resolveProviderModel,
+  resolveProviderPermissionMode,
+  selectedModelForProvider,
+  withAlwaysThinkingEnabled,
+  type CodexApprovalPreset,
+  type CodexCollaborationMode,
+  type CodexSandboxSelection,
+  type CodexSandboxSource,
+} from './modelProviderStateHelpers';
 
 export type ViewMode = 'chat' | 'history' | 'settings';
 
@@ -43,24 +58,60 @@ export interface UseModelProviderStateOptions {
  *
  * `currentProviderRef` is exposed for window callbacks registered with stable
  * identity that must read the current provider when fired by the JCEF bridge.
- * The ref is updated via render-time assignment (no useEffect mirror).
+ * The ref is mirrored inside useEffect so no ref access happens during render.
  */
 export function useModelProviderState({ addToast, t }: UseModelProviderStateOptions) {
   // ── Cross-slice state owned by the orchestrator ──
   const [currentProvider, setCurrentProvider] = useState('claude');
   const [permissionMode, setPermissionMode] = useState<PermissionMode>('default');
+  const [codexCollaborationMode, setCodexCollaborationMode] = useState<CodexCollaborationMode>('default');
+  const [codexApprovalPreset, setCodexApprovalPreset] = useState<CodexApprovalPreset>('request');
+  const [codexSandboxSelection, setCodexSandboxSelection] = useState<CodexSandboxSelection>('workspace-write');
+  const [codexSandboxSource, setCodexSandboxSource] = useState<CodexSandboxSource>('default');
+  const [codexEffectiveSettings, setCodexEffectiveSettings] = useState<Record<string, unknown> | null>(null);
+  const [codexSettingsPending, setCodexSettingsPending] = useState(false);
 
   // External-facing ref so window callbacks can read the latest provider
-  // without re-binding. Render-time assignment avoids the useRef + useEffect
-  // mirror anti-pattern (rule 5.15).
+  // without re-binding. Mirrored in an effect (bridge callbacks fire async,
+  // after commit) so render stays free of ref writes.
   const currentProviderRef = useRef(currentProvider);
-  currentProviderRef.current = currentProvider;
+  useEffect(() => {
+    currentProviderRef.current = currentProvider;
+  }, [currentProvider]);
+
+  // Native settings acknowledgements only become effective after the app
+  // server emits thread/settings/updated. Keep that boundary visible to the
+  // UI so a mid-turn selection is presented as “next turn” until confirmed.
+  useEffect(() => {
+    const handleRuntimeEvent = (event: Event) => {
+      const detail = (event as CustomEvent<Record<string, unknown>>).detail;
+      if (currentProvider !== 'codex' || !detail || detail.kind !== 'thread/settings/updated'
+        || (detail.rootThreadId && detail.threadId !== detail.rootThreadId)) return;
+      const payload = detail.payload;
+      setCodexEffectiveSettings(payload && typeof payload === 'object' && !Array.isArray(payload)
+        ? payload as Record<string, unknown> : null);
+      const settings = payload && typeof payload === 'object' ? payload as Record<string, unknown> : {};
+      const collaboration = settings.collaborationMode as { mode?: string } | undefined;
+      const sandbox = settings.sandboxPolicy as { type?: string } | string | undefined;
+      const sandboxType = typeof sandbox === 'string' ? sandbox : sandbox?.type;
+      const expectedSandbox = { 'read-only': 'readOnly', 'workspace-write': 'workspaceWrite', 'danger-full-access': 'dangerFullAccess' }[codexSandboxSelection];
+      const expectedPolicy = codexApprovalPreset === 'sandboxed-auto' || codexApprovalPreset === 'full-access' ? 'never' : 'on-request';
+      const expectedReviewer = codexApprovalPreset === 'request' ? 'user' : 'auto_review';
+      const matches = collaboration?.mode === codexCollaborationMode && settings.approvalPolicy === expectedPolicy
+        && settings.approvalsReviewer === expectedReviewer && (sandboxType === expectedSandbox || sandboxType === codexSandboxSelection);
+      setCodexSettingsPending((pending) => pending && !matches);
+    };
+    window.addEventListener('codex-runtime-event', handleRuntimeEvent);
+    return () => window.removeEventListener('codex-runtime-event', handleRuntimeEvent);
+  }, [currentProvider, codexApprovalPreset, codexCollaborationMode, codexSandboxSelection]);
 
   // ── Provider-specific sub-hooks ──
   const claude = useClaudeProvider();
   const codex = useCodexProvider();
   const grok = useGrokProvider();
   const kimi = useKimiProvider();
+  const miniMax = useMiniMaxProvider();
+  const zcode = useZcodeProvider();
   const openCode = useOpenCodeProvider();
   const pi = usePiProvider();
   const omp = useOmpProvider();
@@ -83,6 +134,36 @@ export function useModelProviderState({ addToast, t }: UseModelProviderStateOpti
     reasoningEffort, setReasoningEffort,
     codexFastMode, setCodexFastMode,
   } = codex;
+
+  // The permission mode is app-level state that survives a plugin reinstall,
+  // while the access scope lives in webview localStorage, which does not. When
+  // the scope was never claimed explicitly (`source === 'default'`, i.e. a wiped
+  // or pre-scope snapshot) it must track the authoritative mode instead of
+  // sitting on the safe default: otherwise the selector reads Full Auto while
+  // the app-server still runs workspace-write and denies writes outside the
+  // project. An explicit 'user'/'native'/'migrated' choice is never overridden.
+  useEffect(() => {
+    if (currentProvider !== 'codex' || codexSandboxSource !== 'default') {
+      return;
+    }
+    const derived = deriveCodexAccessScopeFromMode(codexPermissionMode);
+    if (!derived) {
+      return;
+    }
+    if (derived.approvalPreset === codexApprovalPreset
+      && derived.sandboxSelection === codexSandboxSelection) {
+      return;
+    }
+    setCodexApprovalPreset(derived.approvalPreset);
+    setCodexSandboxSelection(derived.sandboxSelection);
+    setCodexSettingsPending(true);
+    sendBridgeEvent('set_codex_approval_preset', derived.approvalPreset);
+    sendBridgeEvent('set_codex_sandbox_selection', JSON.stringify({
+      selection: derived.sandboxSelection,
+      source: codexSandboxSource,
+    }));
+  }, [currentProvider, codexApprovalPreset, codexPermissionMode, codexSandboxSelection, codexSandboxSource]);
+
   const {
     selectedGrokModel, setSelectedGrokModel,
     grokPermissionMode, setGrokPermissionMode,
@@ -91,6 +172,14 @@ export function useModelProviderState({ addToast, t }: UseModelProviderStateOpti
     selectedKimiModel, setSelectedKimiModel,
     kimiPermissionMode, setKimiPermissionMode,
   } = kimi;
+  const {
+    selectedMiniMaxModel, setSelectedMiniMaxModel,
+    miniMaxPermissionMode, setMiniMaxPermissionMode,
+  } = miniMax;
+  const {
+    selectedZcodeModel, setSelectedZcodeModel,
+    zcodePermissionMode, setZcodePermissionMode,
+  } = zcode;
   const {
     selectedOpenCodeModel, setSelectedOpenCodeModel,
     openCodePermissionMode, setOpenCodePermissionMode,
@@ -118,12 +207,16 @@ export function useModelProviderState({ addToast, t }: UseModelProviderStateOpti
     setCodexPermissionMode,
     setSelectedGrokModel,
     setSelectedKimiModel,
+    setSelectedMiniMaxModel,
+    setSelectedZcodeModel,
     setSelectedOpenCodeModel,
     setSelectedPiModel,
     setSelectedOmpModel,
     setSelectedDshModel,
     setGrokPermissionMode,
     setKimiPermissionMode,
+    setMiniMaxPermissionMode,
+    setZcodePermissionMode,
     setOpenCodePermissionMode,
     setPiPermissionMode,
     setOmpPermissionMode,
@@ -133,6 +226,10 @@ export function useModelProviderState({ addToast, t }: UseModelProviderStateOpti
     setReasoningEffort,
     setCodexFastMode,
     setDshPreset,
+    setCodexCollaborationMode,
+    setCodexApprovalPreset,
+    setCodexSandboxSelection,
+    setCodexSandboxSource,
     currentProvider,
     selectedClaudeModel,
     selectedCodexModel,
@@ -140,12 +237,16 @@ export function useModelProviderState({ addToast, t }: UseModelProviderStateOpti
     codexPermissionMode,
     selectedGrokModel,
     selectedKimiModel,
+    selectedMiniMaxModel,
+    selectedZcodeModel,
     selectedOpenCodeModel,
     selectedPiModel,
     selectedOmpModel,
     selectedDshModel,
     grokPermissionMode,
     kimiPermissionMode,
+    miniMaxPermissionMode,
+    zcodePermissionMode,
     openCodePermissionMode,
     piPermissionMode,
     ompPermissionMode,
@@ -154,24 +255,25 @@ export function useModelProviderState({ addToast, t }: UseModelProviderStateOpti
     reasoningEffort,
     codexFastMode,
     dshPreset,
+    codexCollaborationMode,
+    codexApprovalPreset,
+    codexSandboxSelection,
+    codexSandboxSource,
   });
 
   // ── Computed values ──
-  const selectedModel = currentProvider === 'codex'
-    ? selectedCodexModel
-    : currentProvider === 'grok'
-      ? selectedGrokModel
-      : currentProvider === 'kimi'
-        ? selectedKimiModel
-        : currentProvider === 'opencode'
-          ? selectedOpenCodeModel
-          : currentProvider === 'pi'
-            ? selectedPiModel
-            : currentProvider === 'omp'
-              ? selectedOmpModel
-              : currentProvider === 'dsh'
-                ? selectedDshModel
-                : selectedClaudeModel;
+  const selectedModel = selectedModelForProvider(currentProvider, {
+    claude: selectedClaudeModel,
+    codex: selectedCodexModel,
+    grok: selectedGrokModel,
+    kimi: selectedKimiModel,
+    minimax: selectedMiniMaxModel,
+    zcode: selectedZcodeModel,
+    opencode: selectedOpenCodeModel,
+    pi: selectedPiModel,
+    omp: selectedOmpModel,
+    dsh: selectedDshModel,
+  });
   const currentSdkInstalled = useMemo(
     () => isSdkInstalled(currentProvider),
     [isSdkInstalled, currentProvider],
@@ -182,44 +284,65 @@ export function useModelProviderState({ addToast, t }: UseModelProviderStateOpti
       : null,
     [currentProvider, isSdkStatusKnown, usage.sdkStatusError],
   );
-  // Whether the installed Claude SDK meets the minimum version required for the
-  // selected model's tier (Fable needs >= 0.3.182). `undefined` means the backend
-  // hasn't reported it (SDK not installed, or an old plugin version without the
-  // field) — callers must only warn on an explicit `false` to avoid false positives.
+  // Whether the installed Claude SDK meets the minimum version required for
+  // the selected feature tier. `undefined` means the backend has not reported it;
+  // callers must only act on an explicit `false` to avoid false positives.
+  // Codex no longer gates features on a TypeScript SDK version: its runtime is
+  // the CLI itself and capability decisions come from the native runtime.
   const claudeSdkMeetsMinimum = sdkStatus?.['claude-sdk']?.meetsMinimumVersion;
-
-  // ── Cross-provider handlers ──
   const handleModeSelect = useCallback((mode: PermissionMode) => {
     if (currentProvider === 'codex') {
-      const codexMode: PermissionMode = mode === 'plan' ? 'default' : mode;
-      setPermissionMode(codexMode);
-      setCodexPermissionMode(codexMode);
-      sendBridgeEvent('set_mode', codexMode);
+      // Codex exposes plan as a native collaboration mode while approval
+      // policy remains an independent setting carried by the next turn.
+      setPermissionMode(mode);
+      setCodexPermissionMode(mode);
+      const collaborationMode: CodexCollaborationMode = mode === 'plan' ? 'plan' : 'default';
+      setCodexCollaborationMode(collaborationMode);
+      sendBridgeEvent('set_codex_collaboration_mode', collaborationMode);
+      const approvalPreset: CodexApprovalPreset = mode === 'plan'
+          || (mode === 'default' && codexCollaborationMode === 'plan') ? codexApprovalPreset : mode === 'auto'
+        ? 'auto'
+        : mode === 'bypassPermissions' ? 'full-access' : 'request';
+      setCodexApprovalPreset(approvalPreset);
+      setCodexSettingsPending(true);
+      sendBridgeEvent('set_codex_approval_preset', approvalPreset);
+      if (mode === 'bypassPermissions') {
+        setCodexSandboxSelection('danger-full-access');
+        setCodexSandboxSource('user');
+        sendBridgeEvent('set_codex_sandbox_selection', JSON.stringify({
+          selection: 'danger-full-access',
+          source: 'user',
+        }));
+      } else if (codexSandboxSelection === 'danger-full-access' && codexSandboxSource !== 'native') {
+        // Auto review rejects a full-access sandbox, and default/plan no longer
+        // carry bypass semantics — leaving the bypass-installed full-access in
+        // place would silently run without a sandbox while the mode selector
+        // shows a safer mode. Restore the workspace default; a user who truly
+        // wants full access can re-select it in Settings afterwards. A 'native'
+        // selection comes from the user's own Codex config and stays untouched.
+        setCodexSandboxSelection('workspace-write');
+        setCodexSandboxSource('user');
+        sendBridgeEvent('set_codex_sandbox_selection', JSON.stringify({
+          selection: 'workspace-write',
+          source: 'user',
+        }));
+      }
+      sendBridgeEvent('set_mode', mode);
       return;
     }
     if (isCliOnlyProvider(currentProvider)) {
-      const cliMode = normalizeCliPermissionMode(mode, currentProvider);
-      setPermissionMode(cliMode);
-      if (currentProvider === 'grok') setGrokPermissionMode(cliMode);
-      if (currentProvider === 'kimi') setKimiPermissionMode(cliMode);
-      if (currentProvider === 'opencode') setOpenCodePermissionMode(cliMode);
-      if (currentProvider === 'pi') setPiPermissionMode(cliMode);
-      if (currentProvider === 'omp') {
-        setOmpPermissionMode(cliMode);
-        // The omp mode selector is a shortcut over the model value: role modes
-        // set the model to the role id, 'default' selects the CLI default.
-        const ompModel = cliMode === 'default' ? 'auto' : cliMode;
-        setSelectedOmpModel(ompModel);
-        sendBridgeEvent('set_model', ompModel);
-        // Java's VALID_PERMISSION_MODES is a static whitelist — dynamic roles
-        // (e.g. 'designer') would be rejected there; set_model carries them.
-        if (isValidPermissionMode(cliMode)) {
-          sendBridgeEvent('set_mode', cliMode);
-        }
-        return;
-      }
-      if (currentProvider === 'dsh') setDshPermissionMode(cliMode);
-      sendBridgeEvent('set_mode', cliMode);
+      applyCliModeSelect(currentProvider, mode, {
+        setPermissionMode,
+        setGrokPermissionMode,
+        setKimiPermissionMode,
+        setMiniMaxPermissionMode,
+        setZcodePermissionMode,
+        setOpenCodePermissionMode,
+        setPiPermissionMode,
+        setOmpPermissionMode,
+        setDshPermissionMode,
+        setSelectedOmpModel,
+      });
       return;
     }
     setPermissionMode(mode);
@@ -227,10 +350,20 @@ export function useModelProviderState({ addToast, t }: UseModelProviderStateOpti
     sendBridgeEvent('set_mode', mode);
   }, [
     currentProvider,
+    codexCollaborationMode,
+    codexApprovalPreset,
+    codexSandboxSelection,
+    codexSandboxSource,
     setCodexPermissionMode,
+    setCodexCollaborationMode,
+    setCodexApprovalPreset,
+    setCodexSandboxSelection,
+    setCodexSandboxSource,
     setClaudePermissionMode,
     setGrokPermissionMode,
     setKimiPermissionMode,
+    setMiniMaxPermissionMode,
+    setZcodePermissionMode,
     setOpenCodePermissionMode,
     setPiPermissionMode,
     setOmpPermissionMode,
@@ -238,44 +371,36 @@ export function useModelProviderState({ addToast, t }: UseModelProviderStateOpti
     setDshPermissionMode,
   ]);
 
+  /**
+   * Settings → Permissions sandbox change. The chat state is the value every
+   * turn sends, so it must be written here too; marking the scope 'user' stops
+   * the boot reconciliation from re-deriving it from the permission mode.
+   */
+  const handleCodexSandboxSelectionChange = useCallback((mode: CodexSandboxSelection) => {
+    setCodexSandboxSelection(mode);
+    setCodexSandboxSource('user');
+    setCodexSettingsPending(true);
+    sendBridgeEvent('set_codex_sandbox_selection', JSON.stringify({
+      selection: mode,
+      source: 'user',
+    }));
+  }, [setCodexSandboxSelection, setCodexSandboxSource]);
+
   const handleModelSelect = useCallback((modelId: string) => {
-    if (currentProvider === 'claude') {
-      const strippedModelId = strip1MContextSuffix(modelId);
-      const normalizedModelId = normalizeClaudeModelId(strippedModelId);
-      setSelectedClaudeModel(normalizedModelId);
-      sendBridgeEvent('set_model', apply1MContextSuffix(normalizedModelId, longContextEnabled));
-    } else if (currentProvider === 'codex') {
-      setSelectedCodexModel(modelId);
-      sendBridgeEvent('set_model', modelId);
-    } else if (currentProvider === 'grok') {
-      setSelectedGrokModel(modelId);
-      sendBridgeEvent('set_model', modelId);
-    } else if (currentProvider === 'kimi') {
-      setSelectedKimiModel(modelId);
-      sendBridgeEvent('set_model', modelId);
-    } else if (currentProvider === 'opencode') {
-      setSelectedOpenCodeModel(modelId);
-      sendBridgeEvent('set_model', modelId);
-    } else if (currentProvider === 'pi') {
-      setSelectedPiModel(modelId);
-      sendBridgeEvent('set_model', modelId);
-    } else if (currentProvider === 'omp') {
-      setSelectedOmpModel(modelId);
-      sendBridgeEvent('set_model', modelId);
-      // Mode⇔model unification: role models select the same-named mode,
-      // anything else ('auto' or catalog models) selects 'default'.
-      const ompMode = ompModeForModelId(modelId, ompRoles);
-      setOmpPermissionMode(ompMode);
-      setPermissionMode(ompMode);
-      // Dynamic roles are not in Java's static mode whitelist — set_model
-      // above already carries the role; skip set_mode for them.
-      if (isValidPermissionMode(ompMode)) {
-        sendBridgeEvent('set_mode', ompMode);
-      }
-    } else if (currentProvider === 'dsh') {
-      setSelectedDshModel(modelId);
-      sendBridgeEvent('set_model', modelId);
-    }
+    applyModelSelect(currentProvider, modelId, longContextEnabled, ompRoles, {
+      setSelectedClaudeModel,
+      setSelectedCodexModel,
+      setSelectedGrokModel,
+      setSelectedKimiModel,
+      setSelectedMiniMaxModel,
+      setSelectedZcodeModel,
+      setSelectedOpenCodeModel,
+      setSelectedPiModel,
+      setSelectedOmpModel,
+      setSelectedDshModel,
+      setOmpPermissionMode,
+      setPermissionMode,
+    });
   }, [
     currentProvider,
     longContextEnabled,
@@ -284,6 +409,8 @@ export function useModelProviderState({ addToast, t }: UseModelProviderStateOpti
     setSelectedCodexModel,
     setSelectedGrokModel,
     setSelectedKimiModel,
+    setSelectedMiniMaxModel,
+    setSelectedZcodeModel,
     setSelectedOpenCodeModel,
     setSelectedPiModel,
     setSelectedOmpModel,
@@ -295,22 +422,18 @@ export function useModelProviderState({ addToast, t }: UseModelProviderStateOpti
     setCurrentProvider(providerId);
     sendBridgeEvent('set_provider', providerId);
 
-    let modeToSet: PermissionMode = claudePermissionMode;
-    if (providerId === 'codex') {
-      modeToSet = normalizeCliPermissionMode(codexPermissionMode, providerId);
-    } else if (providerId === 'grok') {
-      modeToSet = normalizeCliPermissionMode(grokPermissionMode, providerId);
-    } else if (providerId === 'kimi') {
-      modeToSet = normalizeCliPermissionMode(kimiPermissionMode, providerId);
-    } else if (providerId === 'opencode') {
-      modeToSet = normalizeCliPermissionMode(openCodePermissionMode, providerId);
-    } else if (providerId === 'pi') {
-      modeToSet = normalizeCliPermissionMode(piPermissionMode, providerId);
-    } else if (providerId === 'omp') {
-      modeToSet = normalizeCliPermissionMode(ompPermissionMode, providerId);
-    } else if (providerId === 'dsh') {
-      modeToSet = normalizeCliPermissionMode(dshPermissionMode, providerId);
-    }
+    const modeToSet = resolveProviderPermissionMode(providerId, {
+      claude: claudePermissionMode,
+      codex: codexPermissionMode,
+      grok: grokPermissionMode,
+      kimi: kimiPermissionMode,
+      minimax: miniMaxPermissionMode,
+      zcode: zcodePermissionMode,
+      opencode: openCodePermissionMode,
+      pi: piPermissionMode,
+      omp: ompPermissionMode,
+      dsh: dshPermissionMode,
+    });
     setPermissionMode(modeToSet);
     // Dynamic omp roles are not in Java's static mode whitelist — the
     // set_model event below carries the role; skip set_mode for them.
@@ -318,20 +441,26 @@ export function useModelProviderState({ addToast, t }: UseModelProviderStateOpti
       sendBridgeEvent('set_mode', modeToSet);
     }
 
-    let newModel = apply1MContextSuffix(selectedClaudeModel, longContextEnabled);
-    if (providerId === 'codex') newModel = selectedCodexModel;
-    else if (providerId === 'grok') newModel = selectedGrokModel;
-    else if (providerId === 'kimi') newModel = selectedKimiModel;
-    else if (providerId === 'opencode') newModel = selectedOpenCodeModel;
-    else if (providerId === 'pi') newModel = selectedPiModel;
-    else if (providerId === 'omp') newModel = selectedOmpModel;
-    else if (providerId === 'dsh') newModel = selectedDshModel;
+    const newModel = resolveProviderModel(providerId, {
+      claude: selectedClaudeModel,
+      codex: selectedCodexModel,
+      grok: selectedGrokModel,
+      kimi: selectedKimiModel,
+      minimax: selectedMiniMaxModel,
+      zcode: selectedZcodeModel,
+      opencode: selectedOpenCodeModel,
+      pi: selectedPiModel,
+      omp: selectedOmpModel,
+      dsh: selectedDshModel,
+    }, longContextEnabled);
     sendBridgeEvent('set_model', newModel);
   }, [
     claudePermissionMode,
     codexPermissionMode,
     grokPermissionMode,
     kimiPermissionMode,
+    miniMaxPermissionMode,
+    zcodePermissionMode,
     openCodePermissionMode,
     piPermissionMode,
     ompPermissionMode,
@@ -340,6 +469,8 @@ export function useModelProviderState({ addToast, t }: UseModelProviderStateOpti
     selectedClaudeModel,
     selectedGrokModel,
     selectedKimiModel,
+    selectedMiniMaxModel,
+    selectedZcodeModel,
     selectedOpenCodeModel,
     selectedPiModel,
     selectedOmpModel,
@@ -369,35 +500,15 @@ export function useModelProviderState({ addToast, t }: UseModelProviderStateOpti
     setClaudeSettingsAlwaysThinkingEnabled(enabled);
 
     if (!config || isSpecialProvider) {
-      settings.setActiveProviderConfig(prev => prev ? {
-        ...prev,
-        settingsConfig: {
-          ...prev.settingsConfig,
-          alwaysThinkingEnabled: enabled,
-        },
-      } : prev);
+      settings.setActiveProviderConfig(prev => withAlwaysThinkingEnabled(prev, enabled));
       sendBridgeEvent('set_thinking_enabled', JSON.stringify({ enabled }));
       addToast(enabled ? t('toast.thinkingEnabled') : t('toast.thinkingDisabled'), 'success');
       return;
     }
 
-    settings.setActiveProviderConfig(prev => prev ? {
-      ...prev,
-      settingsConfig: {
-        ...prev.settingsConfig,
-        alwaysThinkingEnabled: enabled,
-      },
-    } : null);
+    settings.setActiveProviderConfig(prev => withAlwaysThinkingEnabled(prev, enabled));
 
-    sendBridgeEvent('update_provider', JSON.stringify({
-      id: config.id,
-      updates: {
-        settingsConfig: {
-          ...(config.settingsConfig || {}),
-          alwaysThinkingEnabled: enabled,
-        },
-      },
-    }));
+    sendBridgeEvent('update_provider', buildThinkingUpdatePayload(config, enabled));
     addToast(enabled ? t('toast.thinkingEnabled') : t('toast.thinkingDisabled'), 'success');
   }, [settings, setClaudeSettingsAlwaysThinkingEnabled, addToast, t]);
 
@@ -406,6 +517,8 @@ export function useModelProviderState({ addToast, t }: UseModelProviderStateOpti
     ...codex,
     ...grok,
     ...kimi,
+    ...miniMax,
+    ...zcode,
     ...openCode,
     ...pi,
     ...omp,
@@ -416,11 +529,22 @@ export function useModelProviderState({ addToast, t }: UseModelProviderStateOpti
     sdkStatusError: currentSdkStatusError,
     currentProvider, setCurrentProvider,
     permissionMode, setPermissionMode,
+    codexCollaborationMode, setCodexCollaborationMode,
+    codexApprovalPreset, setCodexApprovalPreset,
+    codexSandboxSelection, setCodexSandboxSelection,
+    codexSandboxSource, setCodexSandboxSource,
+    codexEffectiveSettings,
+    codexEffectiveSandbox: effectiveCodexSandboxFromSettings(codexEffectiveSettings),
+    codexSettingsPending,
     selectedModel,
     currentSdkInstalled,
     claudeSdkMeetsMinimum,
+    // The Codex runtime is the CLI itself; native auto capability is decided
+    // by native constraints at send time, not by a TypeScript SDK version.
+    codexNativeAutoReviewAvailable: true,
     currentProviderRef,
     handleModeSelect,
+    handleCodexSandboxSelectionChange,
     handleModelSelect,
     handleProviderSelect,
     handleDshPresetChange,

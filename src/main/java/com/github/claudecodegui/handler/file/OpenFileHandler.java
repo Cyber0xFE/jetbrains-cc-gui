@@ -2,11 +2,14 @@ package com.github.claudecodegui.handler.file;
 
 import com.github.claudecodegui.bridge.NodeDetector;
 import com.github.claudecodegui.handler.core.HandlerContext;
+import com.github.claudecodegui.i18n.ClaudeCodeGuiBundle;
 
 import com.github.claudecodegui.util.EditorFileUtils;
 import com.github.claudecodegui.util.PathUtils;
 import com.github.claudecodegui.util.PlatformUtils;
 import com.intellij.ide.BrowserUtil;
+import com.intellij.ide.projectView.ProjectView;
+import com.intellij.ide.projectView.impl.ProjectViewPane;
 import com.intellij.openapi.application.ApplicationManager;
 import com.intellij.openapi.application.ModalityState;
 import com.intellij.openapi.diagnostic.Logger;
@@ -18,6 +21,9 @@ import com.intellij.openapi.project.DumbService;
 import com.intellij.openapi.project.Project;
 import com.intellij.openapi.util.Computable;
 import com.intellij.openapi.vfs.VirtualFile;
+import com.intellij.openapi.wm.ToolWindow;
+import com.intellij.openapi.wm.ToolWindowId;
+import com.intellij.openapi.wm.ToolWindowManager;
 import com.intellij.psi.search.FilenameIndex;
 import com.intellij.psi.search.GlobalSearchScope;
 import com.intellij.util.concurrency.AppExecutorUtil;
@@ -45,6 +51,8 @@ class OpenFileHandler {
 
     private static final Logger LOG = Logger.getInstance(OpenFileHandler.class);
     private static final Pattern LINE_INFO_PATTERN = Pattern.compile("^(.*):(\\d+)(?:-(\\d+))?$");
+    private static final Pattern SAFE_EXTERNAL_URL_PATTERN =
+            Pattern.compile("^(https?|mailto):.*$", Pattern.CASE_INSENSITIVE);
 
     private final HandlerContext context;
 
@@ -70,9 +78,7 @@ class OpenFileHandler {
 
                 if (resolution == null) {
                     LOG.warn("File not found: " + actualPath);
-                    ApplicationManager.getApplication().invokeLater(() -> {
-                        context.callJavaScript("addErrorMessage", context.escapeJs("Cannot open file: file does not exist (" + actualPath + ")"));
-                    }, ModalityState.nonModal());
+                    this.reportNavigationFailure(actualPath);
                     return;
                 }
 
@@ -82,8 +88,7 @@ class OpenFileHandler {
                         if (context.getProject().isDisposed() || !resolution.virtualFile().isValid()) {
                             return;
                         }
-                        openInEditor(resolution.virtualFile(), lineNumber, endLineNumber);
-                        LOG.info("Successfully opened file via fuzzy match: " + filePath);
+                        this.openOrReveal(resolution.virtualFile(), lineNumber, endLineNumber);
                     }, ModalityState.nonModal());
                     return;
                 }
@@ -95,15 +100,16 @@ class OpenFileHandler {
                         if (context.getProject().isDisposed() || !virtualFile.isValid()) {
                             return;
                         }
-                        openInEditor(virtualFile, lineNumber, endLineNumber);
-                        LOG.info("Successfully opened file: " + filePath);
+                        this.openOrReveal(virtualFile, lineNumber, endLineNumber);
                     }, ModalityState.nonModal());
                 }, () -> {
-                    LOG.error("Failed to get VirtualFile: " + filePath);
-                    context.callJavaScript("addErrorMessage", context.escapeJs("Cannot open file: " + filePath));
+                    LOG.warn("Failed to get VirtualFile: " + filePath);
+                    this.reportNavigationFailure(filePath);
                 });
             } catch (Exception e) {
-                LOG.error("Failed to open file: " + e.getMessage(), e);
+                OpenFileNavigation.letCancellationEscape(e);
+                LOG.warn("File navigation failed: " + e.getMessage(), e);
+                this.reportNavigationFailure(filePath);
             }
         }, AppExecutorUtil.getAppExecutorService());
     }
@@ -569,30 +575,92 @@ class OpenFileHandler {
     /**
      * Open a virtual file in the editor, optionally navigating to a line range.
      */
-    private void openInEditor(VirtualFile virtualFile, int lineNumber, int endLineNumber) {
-        Project project = context.getProject();
-        if (project == null || project.isDisposed()) {
+    private void openOrReveal(VirtualFile virtualFile, int lineNumber, int endLineNumber) {
+        Project project = this.context.getProject();
+        if (project == null || project.isDisposed() || !virtualFile.isValid()) {
             return;
+        }
+        OpenFileNavigation.openOrReveal(() -> this.openInEditor(virtualFile, lineNumber, endLineNumber),
+                () -> this.revealInProjectTree(project, virtualFile)).thenAccept(success -> {
+            if (!success) {
+                this.reportNavigationFailure(virtualFile.getPath());
+            }
+        });
+    }
+
+    private CompletableFuture<Boolean> revealInProjectTree(Project project, VirtualFile virtualFile) {
+        CompletableFuture<Boolean> selected = new CompletableFuture<>();
+        ToolWindow window = ToolWindowManager.getInstance(project).getToolWindow(ToolWindowId.PROJECT_VIEW);
+        if (window == null) {
+            return CompletableFuture.completedFuture(false);
+        }
+        window.activate(() -> {
+            try {
+                if (project.isDisposed() || !virtualFile.isValid()) {
+                    selected.complete(false);
+                    return;
+                }
+                ProjectView view = ProjectView.getInstance(project);
+                if (view == null || view.getProjectViewPaneById(ProjectViewPane.ID) == null) {
+                    selected.complete(false);
+                    return;
+                }
+                Runnable select = () -> {
+                    try {
+                        view.selectCB(null, virtualFile, true)
+                                .doWhenDone(() -> selected.complete(true))
+                                .doWhenRejected(() -> selected.complete(false));
+                    } catch (RuntimeException error) {
+                        selected.completeExceptionally(error);
+                        OpenFileNavigation.letCancellationEscape(error);
+                    }
+                };
+                // The Packages pane cannot reveal archives; switch to the physical project tree.
+                if (ProjectViewPane.ID.equals(view.getCurrentViewId())) {
+                    select.run();
+                } else {
+                    view.changeViewCB(ProjectViewPane.ID, null).doWhenDone(select)
+                            .doWhenRejected(() -> selected.complete(false));
+                }
+            } catch (RuntimeException error) {
+                selected.completeExceptionally(error);
+                OpenFileNavigation.letCancellationEscape(error);
+            }
+        });
+        return selected;
+    }
+
+    private void reportNavigationFailure(String path) {
+        ApplicationManager.getApplication().invokeLater(() -> {
+            Project project = this.context.getProject();
+            if (project != null && !project.isDisposed()) {
+                this.context.callJavaScript("addErrorMessage",
+                        this.context.escapeJs(ClaudeCodeGuiBundle.message("file.navigationFailed", path)));
+            }
+        }, ModalityState.nonModal());
+    }
+
+    private boolean openInEditor(VirtualFile virtualFile, int lineNumber, int endLineNumber) {
+        Project project = this.context.getProject();
+        if (project == null || project.isDisposed()) {
+            return false;
         }
 
         if (lineNumber <= 0) {
-            FileEditorManager.getInstance(project).openFile(virtualFile, true);
-            return;
+            return FileEditorManager.getInstance(project).openFile(virtualFile, true).length > 0;
         }
 
         OpenFileDescriptor descriptor = new OpenFileDescriptor(project, virtualFile);
         Editor editor = FileEditorManager.getInstance(project).openTextEditor(descriptor, true);
 
         if (editor == null) {
-            LOG.warn("Cannot open text editor: " + virtualFile.getPath());
-            FileEditorManager.getInstance(project).openFile(virtualFile, true);
-            return;
+            return FileEditorManager.getInstance(project).openFile(virtualFile, true).length > 0;
         }
 
         int lineCount = editor.getDocument().getLineCount();
         if (lineCount <= 0) {
             LOG.warn("File is empty, cannot navigate to line " + lineNumber);
-            return;
+            return true;
         }
 
         int zeroBasedLine = Math.min(Math.max(0, lineNumber - 1), lineCount - 1);
@@ -608,6 +676,7 @@ class OpenFileHandler {
         }
 
         editor.getScrollingModel().scrollToCaret(ScrollType.CENTER);
+        return true;
     }
 
     /**
@@ -621,6 +690,53 @@ class OpenFileHandler {
                 LOG.error("Cannot open browser: " + e.getMessage(), e);
             }
         });
+    }
+
+    /**
+     * Open a URL in the system default browser, bypassing the IDE's embedded
+     * JCEF preview. Used for external docs whose SPA pages render blank inside
+     * JCEF (e.g. npm package pages behind Cloudflare). The platform's
+     * BrowserUtil follows the IDE setting (which may pick the embedded
+     * preview), so shell out to the OS "open URL" command instead.
+     */
+    void handleOpenBrowserExternal(String url) {
+        if (url == null || url.isBlank()) {
+            return;
+        }
+        // The webview gates this bridge event too, but any script in the
+        // webview context can post it — re-validate server-side so a crafted
+        // file:///javascript: URL never reaches the OS protocol handler.
+        if (!isSafeExternalUrl(url)) {
+            LOG.warn("Refusing to open external URL with disallowed scheme: " + url);
+            return;
+        }
+        ApplicationManager.getApplication().executeOnPooledThread(() -> {
+            try {
+                String[] command = PlatformUtils.isWindows()
+                        ? new String[]{"rundll32", "url.dll,FileProtocolHandler", url}
+                        : PlatformUtils.isMac()
+                        ? new String[]{"open", url}
+                        : new String[]{"xdg-open", url};
+                new ProcessBuilder(command).start();
+            } catch (Exception e) {
+                LOG.error("Cannot open external browser: " + e.getMessage(), e);
+                ApplicationManager.getApplication().invokeLater(() -> {
+                    try {
+                        BrowserUtil.browse(url);
+                    } catch (Exception fallbackError) {
+                        LOG.error("Fallback browse failed: " + fallbackError.getMessage(), fallbackError);
+                    }
+                });
+            }
+        });
+    }
+
+    /**
+     * Allowlist of URL schemes that may be handed to the OS "open URL" command.
+     * Mirrors {@code SAFE_BROWSER_PROTOCOLS} in webview/src/utils/bridge.ts.
+     */
+    static boolean isSafeExternalUrl(String url) {
+        return url != null && SAFE_EXTERNAL_URL_PATTERN.matcher(url).matches();
     }
 
     /**

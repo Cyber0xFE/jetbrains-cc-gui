@@ -6,7 +6,7 @@
 import { existsSync } from 'fs';
 import { readFile } from 'fs/promises';
 import { setupApiKey, buildCliEnv, buildWebviewControlledSettingsOverride } from '../../config/api-config.js';
-import { getClaudeProjectSessionFilePath, getRealHomeDir, selectWorkingDirectory } from '../../utils/path-utils.js';
+import { getExistingClaudeProjectSessionFilePath, getRealHomeDir, selectWorkingDirectory } from '../../utils/path-utils.js';
 import { ensureClaudeSdk, hasClaudeProjectSessionFile, waitForClaudeProjectSessionFile, isNoConversationFoundError } from './message-utils.js';
 import { getActiveQueryResult, getActiveSessionIds } from './message-session-registry.js';
 import { getClaudeCliPathOverride } from '../../utils/claude-cli-path.js';
@@ -59,6 +59,8 @@ export async function rewindFiles(sessionId, userMessageId, cwd = null) {
           env: buildCliEnv(),
           // Rewind is a maxTurns:1 file-checkpointing call — no inference output,
           // so 1M context state is irrelevant; only neutralize effort/thinking.
+          // settingsEnv is deliberately omitted as well: no subagent can run here,
+          // so tier resolution cannot apply.
           settings: buildWebviewControlledSettingsOverride(),
           tools: { type: 'preset', preset: 'claude_code' },
           settingSources: ['user', 'project', 'local'],
@@ -249,7 +251,7 @@ export async function resolveRewindCandidateMessageIds(sessionId, cwd, providedM
 
 async function readClaudeProjectSessionMessages(sessionId, cwd) {
   try {
-    const sessionFile = getClaudeProjectSessionFilePath(sessionId, cwd);
+    const sessionFile = getExistingClaudeProjectSessionFilePath(sessionId, cwd);
     if (!existsSync(sessionFile)) {
       return [];
     }

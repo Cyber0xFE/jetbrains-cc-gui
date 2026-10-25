@@ -6,7 +6,10 @@ interface UseDialogCountdownTimeoutOptions {
   isOpen: boolean;
   requestKey?: string | null;
   timeoutSeconds: number;
-  onTimeout: () => void;
+  deadlineMs?: number;
+  /** Return `false` when the timeout decision could not be sent (refused bridge
+   * write); the dialog then re-arms instead of deadlocking on the next click. */
+  onTimeout: () => void | boolean;
 }
 
 interface UseDialogCountdownTimeoutReturn {
@@ -14,44 +17,38 @@ interface UseDialogCountdownTimeoutReturn {
   isTimeWarning: boolean;
   isTimedOut: boolean;
   markSubmitted: () => boolean;
+  restoreSubmission: () => void;
 }
 
 export function useDialogCountdownTimeout({
   isOpen,
   requestKey,
   timeoutSeconds,
+  deadlineMs,
   onTimeout,
 }: UseDialogCountdownTimeoutOptions): UseDialogCountdownTimeoutReturn {
   const [remainingSeconds, setRemainingSeconds] = useState(timeoutSeconds);
-  const remainingSecondsRef = useRef(timeoutSeconds);
   const deadlineMsRef = useRef(0);
-  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const submittedRef = useRef(false);
-  const expiredRef = useRef(false);
-  const timeoutFiredRef = useRef(false);
-
-  // Capture the latest timeoutSeconds so the open effect can read it without
-  // adding timeoutSeconds to its dependency list.
-  const capturedTimeoutRef = useRef(timeoutSeconds);
-  capturedTimeoutRef.current = timeoutSeconds;
+  const timeoutOptionsRef = useRef({ timeoutSeconds, onTimeout });
+  useEffect(() => {
+    timeoutOptionsRef.current = { timeoutSeconds, onTimeout };
+  }, [timeoutSeconds, onTimeout]);
 
   const triggerTimeout = useCallback(() => {
-    expiredRef.current = true;
-    if (submittedRef.current || timeoutFiredRef.current) {
-      return;
-    }
-    timeoutFiredRef.current = true;
+    if (submittedRef.current) return;
     submittedRef.current = true;
-    onTimeout();
-  }, [onTimeout]);
+    // A refused bridge write must not deadlock the dialog: re-arm so the next
+    // interaction retries the timeout decision (the deadline itself never moves).
+    if (timeoutOptionsRef.current.onTimeout() === false) {
+      submittedRef.current = false;
+    }
+  }, []);
 
   const markSubmitted = useCallback(() => {
-    if (submittedRef.current || expiredRef.current) {
-      return false;
-    }
+    if (submittedRef.current) return false;
+    // Background pages may throttle intervals, so submission must check the actual deadline.
     if (Date.now() >= deadlineMsRef.current) {
-      // setInterval tick can be deferred by event loop pressure or tab throttling,
-      // so the wall-clock deadline is the authoritative gate on user submissions.
       triggerTimeout();
       return false;
     }
@@ -59,55 +56,43 @@ export function useDialogCountdownTimeout({
     return true;
   }, [triggerTimeout]);
 
-  useEffect(() => {
-    if (isOpen && requestKey) {
-      const effectiveTimeout = capturedTimeoutRef.current;
-      submittedRef.current = false;
-      expiredRef.current = false;
-      timeoutFiredRef.current = false;
-      remainingSecondsRef.current = effectiveTimeout;
-      setRemainingSeconds(effectiveTimeout);
-      deadlineMsRef.current = Date.now() + effectiveTimeout * 1000;
-    }
-  }, [isOpen, requestKey]);
+  // A refused bridge write may retry, but it never earns a new deadline.
+  const restoreSubmission = useCallback(() => {
+    if (Date.now() < deadlineMsRef.current) submittedRef.current = false;
+  }, []);
 
   useEffect(() => {
-    const clearTimer = () => {
-      if (timerRef.current) {
-        clearInterval(timerRef.current);
-        timerRef.current = null;
-      }
-    };
+    if (!isOpen || !requestKey) return;
 
-    if (!isOpen || !requestKey) {
-      clearTimer();
+    deadlineMsRef.current = typeof deadlineMs === 'number' && Number.isFinite(deadlineMs) && deadlineMs > 0
+      ? deadlineMs
+      : Date.now() + timeoutOptionsRef.current.timeoutSeconds * 1000;
+    submittedRef.current = false;
+    const remaining = () => Math.max(0, Math.ceil((deadlineMsRef.current - Date.now()) / 1000));
+    const initialRemaining = remaining();
+    setRemainingSeconds(initialRemaining);
+    if (initialRemaining === 0) {
+      triggerTimeout();
       return;
     }
 
-    clearTimer();
-    timerRef.current = setInterval(() => {
-      const nextRemainingSeconds = Math.max(
-        0,
-        Math.ceil((deadlineMsRef.current - Date.now()) / 1000),
-      );
-      remainingSecondsRef.current = nextRemainingSeconds;
-      setRemainingSeconds(nextRemainingSeconds);
-      if (nextRemainingSeconds === 0) {
-        clearTimer();
+    const timer = setInterval(() => {
+      const nextRemaining = remaining();
+      setRemainingSeconds(nextRemaining);
+      if (nextRemaining === 0) {
+        clearInterval(timer);
         triggerTimeout();
       }
     }, 1000);
-
-    return clearTimer;
-  }, [isOpen, requestKey, triggerTimeout]);
-
-  const isTimeWarning = remainingSeconds <= WARNING_THRESHOLD_SECONDS && remainingSeconds > 0;
-  const isTimedOut = remainingSeconds <= 0;
+    return () => clearInterval(timer);
+    // Channels may reuse IDs; a new deadline must also start an independent timer lifecycle.
+  }, [isOpen, requestKey, deadlineMs, triggerTimeout]);
 
   return {
     remainingSeconds,
-    isTimeWarning,
-    isTimedOut,
+    isTimeWarning: remainingSeconds <= WARNING_THRESHOLD_SECONDS && remainingSeconds > 0,
+    isTimedOut: remainingSeconds <= 0,
     markSubmitted,
+    restoreSubmission,
   };
 }

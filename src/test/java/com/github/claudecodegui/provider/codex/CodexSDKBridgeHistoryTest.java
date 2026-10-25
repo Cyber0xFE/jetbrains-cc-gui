@@ -1,5 +1,6 @@
 package com.github.claudecodegui.provider.codex;
 
+import com.github.claudecodegui.provider.common.SessionHistoryNotFoundException;
 import com.github.claudecodegui.session.ClaudeSession;
 import com.github.claudecodegui.session.MessageParser;
 import com.github.claudecodegui.util.MessageJsonConverter;
@@ -12,13 +13,60 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Base64;
 import java.util.List;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
 
 public class CodexSDKBridgeHistoryTest {
+
+    @Test
+    public void persistedAttachmentSurvivesBridgeRestartAndReplaysFromHistory() throws IOException {
+        Path rootDir = Files.createTempDirectory("codex-sdk-bridge-persisted-image");
+        Path sessionsDir = rootDir.resolve("sessions");
+        Path imageStorageDir = rootDir.resolve("images");
+        try {
+            byte[] imageBytes = "persistent-png-bytes".getBytes(StandardCharsets.UTF_8);
+            ClaudeSession.Attachment attachment = new ClaudeSession.Attachment(
+                    "screenshot.png",
+                    "image/png",
+                    Base64.getEncoder().encodeToString(imageBytes)
+            );
+            CodexSDKBridge sendingBridge = new CodexSDKBridge(sessionsDir, imageStorageDir);
+
+            JsonArray codexAttachments = sendingBridge.buildCodexAttachments(List.of(attachment));
+
+            assertEquals(1, codexAttachments.size());
+            Path persistedImage = Path.of(codexAttachments.get(0).getAsJsonObject().get("path").getAsString());
+            assertTrue(persistedImage.startsWith(imageStorageDir));
+            assertTrue(Files.isRegularFile(persistedImage));
+            writeSessionFile(
+                    sessionsDir,
+                    "session-persisted-image",
+                    line("2026-09-08T13:52:00Z", "event_msg",
+                            "{\"type\":\"user_message\",\"message\":\"\",\"local_images\":[\""
+                                    + escapeJson(persistedImage.toString()) + "\"]}")
+            );
+
+            CodexSDKBridge restartedBridge = new CodexSDKBridge(sessionsDir, imageStorageDir);
+            List<JsonObject> messages = restartedBridge.getSessionMessages(
+                    "session-persisted-image",
+                    sessionsDir.toString()
+            );
+
+            assertEquals(1, messages.size());
+            JsonArray contentBlocks = messages.get(0).getAsJsonObject("raw").getAsJsonArray("content");
+            assertEquals(1, contentBlocks.size());
+            assertEquals("image", contentBlocks.get(0).getAsJsonObject().get("type").getAsString());
+            assertTrue(contentBlocks.get(0).getAsJsonObject().get("src").getAsString()
+                    .startsWith("data:image/png;base64,"));
+        } finally {
+            deleteDirectory(rootDir);
+        }
+    }
 
     @Test
     public void getSessionMessagesReadsPersistedCodexHistory() throws IOException {
@@ -42,6 +90,21 @@ public class CodexSDKBridgeHistoryTest {
             assertEquals("Restore Codex tab", messages.get(0).get("content").getAsString());
             assertEquals("assistant", messages.get(1).get("type").getAsString());
             assertEquals("Restored from Codex history", messages.get(1).get("content").getAsString());
+        } finally {
+            deleteDirectory(sessionsDir);
+        }
+    }
+
+    @Test
+    public void getSessionMessagesReportsMissingRolloutInsteadOfEmptyTranscript() throws IOException {
+        Path sessionsDir = Files.createTempDirectory("codex-sdk-bridge-history-pruned");
+        try {
+            CodexSDKBridge bridge = new CodexSDKBridge(sessionsDir);
+
+            SessionHistoryNotFoundException exception = assertThrows(SessionHistoryNotFoundException.class,
+                    () -> bridge.getSessionMessages("session-pruned-by-cli", sessionsDir.toString()));
+
+            assertTrue(exception.getMessage().contains("session-pruned-by-cli"));
         } finally {
             deleteDirectory(sessionsDir);
         }

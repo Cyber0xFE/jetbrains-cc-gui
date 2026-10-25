@@ -1,6 +1,5 @@
 import { isJavaFqcnCandidate, normalizeFileNavigationTarget, parseFileLinkTarget } from './linkify';
 
-const BRIDGE_UNAVAILABLE_WARNED = new Set<string>();
 /** Canonical GitHub repository URL, used by star/promo banners across the UI. */
 export const GITHUB_REPO_URL = 'https://github.com/zhukunpenglinyutong/jetbrains-cc-gui';
 
@@ -159,12 +158,15 @@ const isValidFqcn = (className: string): boolean => {
 };
 
 const callBridge = (payload: string) => {
-  if (window.sendToJava) {
-    window.sendToJava(payload);
-    return true;
+  try {
+    if (window.sendToJava) {
+      window.sendToJava(payload);
+      return true;
+    }
+  } catch {
+    // Host/page replacement may throw; callers need a refused dispatch to preserve retries.
+    return false;
   }
-  // Track warned payloads to avoid spam, but don't log to console
-  BRIDGE_UNAVAILABLE_WARNED.add(payload);
   return false;
 };
 
@@ -228,6 +230,20 @@ export const openBrowser = (url?: string) => {
   sendBridgeEvent('open_browser', url);
 };
 
+/**
+ * Open a URL in the OS default browser (outside the IDE's embedded JCEF
+ * preview). Use for external docs whose SPA pages render blank inside JCEF.
+ */
+export const openBrowserExternal = (url?: string) => {
+  if (!url) {
+    return;
+  }
+  if (!SAFE_BROWSER_PROTOCOLS.test(url)) {
+    return;
+  }
+  sendBridgeEvent('open_browser_external', url);
+};
+
 export const sendToJava = (message: string, payload: any = {}) => {
   const payloadStr = typeof payload === 'string' ? payload : JSON.stringify(payload);
   sendBridgeEvent(message, payloadStr);
@@ -266,7 +282,7 @@ export const showMultiEditDiff = (
 export const showEditableDiff = (
   filePath: string,
   operations: Array<{ oldString: string; newString: string; replaceAll?: boolean }>,
-  status: 'A' | 'M'
+  status: import('../types/fileChanges').FileChangeStatus
 ) => {
   // Security: Validate file path (defense-in-depth, backend also validates)
   if (!isValidMutatingPath(filePath)) {
@@ -354,12 +370,12 @@ export const rewindFiles = (sessionId: string, userMessageId: string) => {
  */
 export const undoFileChanges = (
   filePath: string,
-  status: 'A' | 'M',
+  status: import('../types/fileChanges').FileChangeStatus,
   operations: Array<{ oldString: string; newString: string; replaceAll?: boolean }>
 ) => {
   // Security: Validate file path (defense-in-depth, backend also validates)
   if (!isValidMutatingPath(filePath)) {
-    return;
+    return false;
   }
-  sendToJava('undo_file_changes', { filePath, status, operations });
+  return sendBridgeEvent('undo_file_changes', JSON.stringify({ filePath, status, operations }));
 };

@@ -3,6 +3,7 @@ package com.github.claudecodegui.session;
 import com.github.claudecodegui.handler.PermissionHandler;
 import com.github.claudecodegui.permission.PermissionRequest;
 import com.github.claudecodegui.util.JsUtils;
+import com.google.gson.JsonObject;
 import com.intellij.openapi.application.ApplicationManager;
 import com.intellij.openapi.diagnostic.Logger;
 import com.intellij.openapi.vfs.VirtualFileManager;
@@ -48,6 +49,8 @@ public class SessionCallbackAdapter implements ClaudeSession.SessionCallback {
     private final AtomicBoolean streamEndSignalSent = new AtomicBoolean();
     private final AtomicLong streamGeneration = new AtomicLong();
     private final AtomicReference<String> lastSessionId = new AtomicReference<>();
+    /** Latest state callback, retained so stream end can capture the post-boundary raw tree. */
+    private volatile List<ClaudeSession.Message> latestMessages;
 
     public SessionCallbackAdapter(
             StreamMessageCoalescer streamCoalescer,
@@ -101,6 +104,7 @@ public class SessionCallbackAdapter implements ClaudeSession.SessionCallback {
             if (!active) {
                 return;
             }
+            latestMessages = messages;
             streamCoalescer.enqueue(messages);
         }
     }
@@ -109,6 +113,13 @@ public class SessionCallbackAdapter implements ClaudeSession.SessionCallback {
     public void onStateChange(boolean busy, boolean loading, String error) {
         if (isInactive()) {
             return;
+        }
+        if (busy && loading && this.streamEndStarted.get() && !this.streamCoalescer.isStreamActive()) {
+            // A new submission can fail before the provider emits its first stream-start.
+            this.streamEndFallbackAlarm.cancelAllRequests();
+            this.streamEndStarted.set(false);
+            this.streamEndSignalSent.set(false);
+            this.streamGeneration.incrementAndGet();
         }
         // The webview queue owns JS-thread marshalling; only the VFS refresh needs the EDT.
         if (!loading && streamCoalescer.isStreamActive()) {
@@ -137,11 +148,13 @@ public class SessionCallbackAdapter implements ClaudeSession.SessionCallback {
         jsTarget.callJavaScript("updateStatus", JsUtils.escapeJs(message));
     }
 
+    /** Publishes a session identity or an empty ID after transcript expiry. */
     @Override
     public void onSessionIdReceived(String sessionId) {
-        if (isInactive() || sessionId == null || sessionId.trim().isEmpty()) {
+        if (this.isInactive() || sessionId == null) {
             return;
         }
+        sessionId = sessionId.trim();
         // Atomic check-and-record: concurrent emissions of the same id are
         // forwarded exactly once.
         if (sessionId.equals(lastSessionId.getAndSet(sessionId))) {
@@ -213,6 +226,7 @@ public class SessionCallbackAdapter implements ClaudeSession.SessionCallback {
         streamEndStarted.set(false);
         streamEndSignalSent.set(false);
         streamGeneration.incrementAndGet();
+        latestMessages = null;
         contentDeltaThrottler.reset();
         thinkingDeltaThrottler.reset();
         // The queue preserves this lifecycle edge ahead of all following deltas.
@@ -232,14 +246,20 @@ public class SessionCallbackAdapter implements ClaudeSession.SessionCallback {
         safeRun("contentDeltaThrottler.flushNow", contentDeltaThrottler::flushNow);
         safeRun("thinkingDeltaThrottler.flushNow", thinkingDeltaThrottler::flushNow);
 
-        streamCoalescer.flush(sequence -> {
+        List<ClaudeSession.Message> finalMessages = latestMessages;
+        // The flush propagates a genuine bug rather than swallowing it, but this
+        // method still owns the turn's teardown: skipping the two lines below would
+        // leave streamActive true and the frontend waiting on a stream-end signal
+        // that never comes. Contain the failure so the cleanup and the fallback
+        // alarm always run — the alarm is what delivers the signal in that case.
+        safeRun("streamCoalescer.flush", () -> streamCoalescer.flush(finalMessages, sequence -> {
             if (generation != streamGeneration.get()
                     || !streamEndSignalSent.compareAndSet(false, true)) {
                 return;
             }
             streamEndFallbackAlarm.cancelAllRequests();
             sendStreamEndToFrontend(sequence, generation);
-        });
+        }));
         safeRun("streamCoalescer.onStreamEnd", streamCoalescer::onStreamEnd);
 
         streamEndFallbackAlarm.cancelAllRequests();
@@ -266,7 +286,7 @@ public class SessionCallbackAdapter implements ClaudeSession.SessionCallback {
     }
 
     /**
-     * Send the stream-end signal after the final snapshot has entered the webview queue.
+     * Send the stream-end signal after the final snapshot has been accepted by the webview queue.
      *
      * @param sequence final snapshot sequence, or -1 when the fallback is used
      * @param generation stream generation that owns the signal
@@ -328,7 +348,7 @@ public class SessionCallbackAdapter implements ClaudeSession.SessionCallback {
         contentDeltaThrottler.reset();
         thinkingDeltaThrottler.reset();
         jsTarget.callJavaScript("onBlockReset");
-        LOG.debug("Block reset sent to frontend - streaming refs cleared");
+        LOG.debug("Block reset sent to frontend - boundary recorded");
     }
 
     @Override
@@ -379,6 +399,44 @@ public class SessionCallbackAdapter implements ClaudeSession.SessionCallback {
             return;
         }
         jsTarget.callJavaScript("onTaskEvent", JsUtils.escapeJs(eventJson));
+    }
+
+    @Override
+    public void onCodexRuntimeEvent(String eventJson) {
+        if (isInactive() || eventJson == null || eventJson.trim().isEmpty()) {
+            return;
+        }
+        jsTarget.callJavaScript("onCodexRuntimeEvent", JsUtils.escapeJs(eventJson));
+    }
+
+    @Override
+    public void onClaudeHistoryPageInfo(String sessionId, int fromTurn, int totalTurns, boolean hasMore, boolean cursorReset, String sessionTitle) {
+        if (isInactive()) {
+            return;
+        }
+        ApplicationManager.getApplication().invokeLater(() -> {
+            if (isInactive()) {
+                return;
+            }
+            String titleJson = sessionTitle != null ? "\"" + JsUtils.escapeJs(sessionTitle) + "\"" : "null";
+            String json = String.format(
+                "{\"sessionId\":\"%s\",\"fromTurn\":%d,\"totalTurns\":%d,\"hasMore\":%b,\"cursorReset\":%b,\"sessionTitle\":%s}",
+                JsUtils.escapeJs(sessionId), fromTurn, totalTurns, hasMore, cursorReset, titleJson
+            );
+            jsTarget.callJavaScript("claudeHistoryPageInfo", JsUtils.escapeJs(json));
+        });
+    }
+
+    /** Queues page failures before later identity changes can make them obsolete. */
+    @Override
+    public void onClaudeHistoryPageError(String sessionId, String message) {
+        if (this.isInactive()) {
+            return;
+        }
+        JsonObject payload = new JsonObject();
+        payload.addProperty("sessionId", sessionId != null ? sessionId : "");
+        payload.addProperty("message", message != null ? message : "Unknown error");
+        this.jsTarget.callJavaScript("claudeHistoryPageError", JsUtils.escapeJs(payload.toString()));
     }
 
     /**

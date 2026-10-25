@@ -1,9 +1,11 @@
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { TFunction } from 'i18next';
 import type { ClaudeMessage, HistoryData, SubagentHistoryResponse, TaskEventMap } from '../types';
 import { sendBridgeEvent } from '../utils/bridge';
 import { getSkipNewSessionConfirm } from '../utils/skipNewSessionConfirm';
 import { clearAllPersistedExpanded } from '../utils/expandedState';
+import { normalizeClaudeModelForBridge } from '../utils/customClaudeModels';
+import { sumKnownHistoryMessages } from '../utils/historyMessageCount';
 
 type ViewMode = 'chat' | 'history' | 'settings';
 
@@ -43,6 +45,12 @@ interface UseSessionManagementOptions {
    * matches the session being opened.
    */
   applyHistoryModel?: (provider: string, model: string, agent?: string | null) => void;
+  /**
+   * Discards messages still waiting in the send queue. Queued messages belong
+   * to the session they were typed in, so they must not leak into the next
+   * session when the user switches away.
+   */
+  clearQueuedMessages?: () => void;
 }
 
 interface UseSessionManagementReturn {
@@ -94,6 +102,7 @@ export function useSessionManagement({
   addToast,
   t,
   applyHistoryModel,
+  clearQueuedMessages,
 }: UseSessionManagementOptions): UseSessionManagementReturn {
   const [showNewSessionConfirm, setShowNewSessionConfirm] = useState(false);
   const [showInterruptConfirm, setShowInterruptConfirm] = useState(false);
@@ -101,7 +110,9 @@ export function useSessionManagement({
   const suppressNextStatusToastRef = useRef(false);
   const transitionTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const historyDataRef = useRef(historyData);
-  historyDataRef.current = historyData;
+  useEffect(() => {
+    historyDataRef.current = historyData;
+  }, [historyData]);
   const showSessionDeletedToast = useCallback((afterSessionTransition = false) => {
     const toast = { message: t('history.sessionDeleted'), type: 'success' as const };
     if (afterSessionTransition) {
@@ -131,6 +142,16 @@ export function useSessionManagement({
       setStreamingActive(false);
     }
     setMessages([]);
+    // Queued messages were typed against the outgoing session — dropping them
+    // here keeps them from firing into the freshly opened one. The reset via
+    // window.__resetTransientUiState above already clears the queue too (it
+    // also covers the Java-driven clearMessages path); this explicit call only
+    // guards the fallback branch where that global isn't registered yet.
+    // A plain interrupt (no transition) intentionally keeps the queue so the
+    // pending messages still get sent once the turn ends.
+    if (clearQueuedMessages) {
+      clearQueuedMessages();
+    }
     // Drop async subagent events from the prior session: tool_use_ids are
     // globally unique so stale entries cannot mislabel the new session's
     // agents, but leaving them would grow the map without bound.
@@ -174,7 +195,7 @@ export function useSessionManagement({
         }
       }
     }, 15_000); // 15 seconds — generous enough for slow history loads
-  }, [clearToasts, currentSessionIdRef, setStatus, setLoadingState, setIsThinking, setStreamingActive, setMessages, setCurrentSessionId, setCustomSessionTitle, setUsagePercentage, setUsageUsedTokens, setUsageMaxTokens, setTaskEvents, setSubagentHistories]);
+  }, [clearToasts, currentSessionIdRef, setStatus, setLoadingState, setIsThinking, setStreamingActive, setMessages, setCurrentSessionId, setCustomSessionTitle, setUsagePercentage, setUsageUsedTokens, setUsageMaxTokens, setTaskEvents, setSubagentHistories, clearQueuedMessages]);
 
   // Create new session
   const createNewSession = useCallback(() => {
@@ -276,6 +297,13 @@ export function useSessionManagement({
       applyHistoryModel(effectiveProvider, effectiveModel, effectiveAgent || null);
     }
 
+    // Java stores the payload model verbatim, so normalize it here where the
+    // custom model list lives: custom ids stay untouched, retired built-in ids
+    // are mapped to their live replacement (same rule applyHistoryModel uses).
+    const bridgeModel = effectiveModel
+      ? (effectiveProvider === 'claude' ? normalizeClaudeModelForBridge(effectiveModel) : effectiveModel)
+      : '';
+
     // Re-opening the session already active: soft-reload only — do NOT
     // beginSessionTransition (which clears messages and holds the transition
     // guard). Backend routes same-session to reloadActiveSessionMessages.
@@ -287,7 +315,7 @@ export function useSessionManagement({
       sendBridgeEvent('load_session', JSON.stringify({
         sessionId,
         provider: effectiveProvider,
-        ...(effectiveModel ? { model: effectiveModel } : {}),
+        ...(bridgeModel ? { model: bridgeModel } : {}),
       }));
       setCurrentView('chat');
       return;
@@ -302,7 +330,7 @@ export function useSessionManagement({
     sendBridgeEvent('load_session', JSON.stringify({
       sessionId,
       provider: effectiveProvider,
-      ...(effectiveModel ? { model: effectiveModel } : {}),
+      ...(bridgeModel ? { model: bridgeModel } : {}),
     }));
     setCurrentView('chat');
   }, [applyHistoryModel, beginSessionTransition, currentProvider, loading, setCurrentView, currentSessionId]);
@@ -321,10 +349,12 @@ export function useSessionManagement({
         }
 
         const deletedSession = prevHistoryData.sessions.find(s => s.sessionId === sessionId);
+        const sessions = prevHistoryData.sessions.filter(s => s.sessionId !== sessionId);
         return {
           ...prevHistoryData,
-          sessions: prevHistoryData.sessions.filter(s => s.sessionId !== sessionId),
-          total: Math.max(0, (prevHistoryData.total || 0) - (deletedSession?.messageCount || 0))
+          sessions,
+          total: prevHistoryData.source === 'native' ? sumKnownHistoryMessages(sessions)
+            : Math.max(0, (prevHistoryData.total || 0) - (deletedSession?.messageCount || 0))
         };
       });
 
@@ -365,11 +395,13 @@ export function useSessionManagement({
         const deletedMessageCount = prevHistoryData.sessions.reduce((sum, session) => (
           deletedSessionIds.has(session.sessionId) ? sum + (session.messageCount || 0) : sum
         ), 0);
+        const sessions = prevHistoryData.sessions.filter(session => !deletedSessionIds.has(session.sessionId));
 
         return {
           ...prevHistoryData,
-          sessions: prevHistoryData.sessions.filter(session => !deletedSessionIds.has(session.sessionId)),
-          total: Math.max(0, (prevHistoryData.total || 0) - deletedMessageCount)
+          sessions,
+          total: prevHistoryData.source === 'native' ? sumKnownHistoryMessages(sessions)
+            : Math.max(0, (prevHistoryData.total || 0) - deletedMessageCount)
         };
       });
 
@@ -405,21 +437,15 @@ export function useSessionManagement({
 
     // Immediately update frontend state
     if (historyData && historyData.sessions) {
-      const updatedSessions = historyData.sessions.map(session => {
-        if (session.sessionId === sessionId) {
+      // Counts may arrive before React commits another render, so edit the latest rows.
+      setHistoryData(previous => {
+        if (!previous?.sessions) return previous;
+        const sessions = previous.sessions.map(session => {
+          if (session.sessionId !== sessionId) return session;
           const isFavorited = !session.isFavorited;
-          return {
-            ...session,
-            isFavorited,
-            favoritedAt: isFavorited ? Date.now() : undefined
-          };
-        }
-        return session;
-      });
-
-      setHistoryData({
-        ...historyData,
-        sessions: updatedSessions
+          return { ...session, isFavorited, favoritedAt: isFavorited ? Date.now() : undefined };
+        });
+        return { ...previous, sessions };
       });
 
       // Show toast
@@ -440,20 +466,10 @@ export function useSessionManagement({
 
     // Immediately update frontend state
     if (historyData && historyData.sessions) {
-      const updatedSessions = historyData.sessions.map(session => {
-        if (session.sessionId === sessionId) {
-          return {
-            ...session,
-            title: newTitle
-          };
-        }
-        return session;
-      });
-
-      setHistoryData({
-        ...historyData,
-        sessions: updatedSessions
-      });
+      setHistoryData(previous => previous?.sessions ? {
+        ...previous,
+        sessions: previous.sessions.map(session => session.sessionId === sessionId ? { ...session, title: newTitle } : session),
+      } : previous);
 
       // Show success toast
       addToast(t('history.titleUpdated'), 'success');
@@ -464,16 +480,11 @@ export function useSessionManagement({
   // session file. This skips the round-trip through the customTitle endpoint,
   // which would otherwise reject titles over its length limit.
   const applyHistoryTitleLocal = useCallback((sessionId: string, newTitle: string) => {
-    if (historyData && historyData.sessions) {
-      const updatedSessions = historyData.sessions.map(session =>
-        session.sessionId === sessionId ? { ...session, title: newTitle } : session
-      );
-      setHistoryData({
-        ...historyData,
-        sessions: updatedSessions
-      });
-    }
-  }, [historyData, setHistoryData]);
+    setHistoryData(previous => previous?.sessions ? {
+      ...previous,
+      sessions: previous.sessions.map(session => session.sessionId === sessionId ? { ...session, title: newTitle } : session),
+    } : previous);
+  }, [setHistoryData]);
 
   // Convert SDK-created session to CLI-recognizable session.
   // The backend sends an onConversionResult callback with success/failure;

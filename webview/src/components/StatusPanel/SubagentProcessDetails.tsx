@@ -3,9 +3,14 @@ import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import type { SubagentHistoryResponse } from '../../types';
 import { buildSubagentProcessModel, formatSubagentDuration } from './subagentProcess';
+import SubagentProcessHeader from './SubagentProcessHeader';
+import SubagentProcessError from './SubagentProcessError';
+import SubagentProcessSections from './SubagentProcessSections';
+import SubagentProcessEmptyCard from './SubagentProcessEmptyCard';
 
 interface SubagentProcessDetailsProps {
   agentId?: string;
+  agentPath?: string;
   totalDurationMs?: number;
   totalTokens?: number;
   totalToolUseCount?: number;
@@ -25,6 +30,7 @@ function firstMeaningfulLine(text: string | undefined, t: TFunction): string | u
 
 const SubagentProcessDetails = memo(function SubagentProcessDetails({
   agentId,
+  agentPath,
   totalDurationMs,
   totalTokens,
   totalToolUseCount,
@@ -44,103 +50,24 @@ const SubagentProcessDetails = memo(function SubagentProcessDetails({
     totalTokens != null ? `${totalTokens.toLocaleString()} ${t('subagent.process.unitTokens')}` : null,
   ].filter(Boolean).join(' · ');
   const process = buildSubagentProcessModel(history);
-  const finalSummary = firstMeaningfulLine(resultText, t);
+  const finalResult = resultText ?? process.resultText;
+  const finalSummary = firstMeaningfulLine(finalResult, t);
   const hasPrompt = Boolean(prompt && prompt.trim());
   const hasContent = hasPrompt || process.notes.length > 0 || process.readFiles.length > 0 || process.toolCalls.length > 0 || Boolean(finalSummary);
 
   return (
     <div className="subagent-details subagent-process-card">
-      <div className="subagent-process-header">
-        <div>
-          <div className="subagent-process-title">{t('subagent.process.title')}</div>
-          {agentId && <div className="subagent-process-subtitle">{agentId}</div>}
-        </div>
-        {stats && <div className="subagent-process-stats">{stats}</div>}
-      </div>
-
-      {/* Codex pending snapshots carry transient "not found yet" text with a
-          running status; those stay hidden. Non-Codex providers (Claude) report
-          real lookup failures the same way ("Subagent log not found"), and
-          those must remain visible. */}
-      {history?.error && (history.status === 'error' || history.provider !== 'codex') && (
-        <div className="subagent-error">{history.error}</div>
-      )}
-
+      <SubagentProcessHeader agentId={agentId} agentPath={agentPath} stats={stats} />
+      <SubagentProcessError history={history} />
       {hasContent ? (
-        <div className="subagent-process-sections">
-          {hasPrompt && (
-            <section className="subagent-process-section">
-              <div className="subagent-section-heading">
-                <span className="codicon codicon-comment" />
-                {t('subagent.process.prompt')}
-              </div>
-              <div className="subagent-prompt-card">{prompt}</div>
-            </section>
-          )}
-
-          {process.notes.length > 0 && (
-            <section className="subagent-process-section">
-              <div className="subagent-section-heading">
-                <span className="codicon codicon-comment-discussion" />
-                {t('subagent.process.thought')}
-              </div>
-              <div className="subagent-note-card">{process.notes[0]}</div>
-            </section>
-          )}
-
-          {process.readFiles.length > 0 && (
-            <section className="subagent-process-section">
-              <div className="subagent-section-heading">
-                <span className="codicon codicon-files" />
-                {t('subagent.process.filesRead', { count: process.readFiles.length })}
-              </div>
-              <div className="subagent-file-grid">
-                {process.readFiles.map((file) => (
-                  <div key={file} className="subagent-file-chip" title={file}>
-                    <span className="codicon codicon-file-code" />
-                    <span>{file}</span>
-                  </div>
-                ))}
-              </div>
-            </section>
-          )}
-
-          {process.toolCalls.length > 0 && (
-            <section className="subagent-process-section">
-              <div className="subagent-section-heading">
-                <span className="codicon codicon-tools" />
-                {t('subagent.process.otherTools')}
-              </div>
-              <div className="subagent-tool-list">
-                {process.toolCalls.map((tool) => (
-                  <div key={tool.id} className="subagent-tool-chip">
-                    <span>{tool.name}</span>
-                    {tool.detail && <small>{tool.detail}</small>}
-                  </div>
-                ))}
-              </div>
-            </section>
-          )}
-
-          {finalSummary && (
-            <section className="subagent-process-section">
-              <div className="subagent-section-heading">
-                <span className="codicon codicon-pass-filled" />
-                {t('subagent.process.result')}
-              </div>
-              <div className="subagent-result-card">{finalSummary}</div>
-              <details className="subagent-result">
-                <summary>{t('subagent.process.showFullOutput')}</summary>
-                <pre>{resultText}</pre>
-              </details>
-            </section>
-          )}
-        </div>
+        <SubagentProcessSections
+          prompt={hasPrompt ? prompt : undefined}
+          process={process}
+          finalSummary={finalSummary}
+          resultText={finalResult}
+        />
       ) : (
-        <div className="subagent-loading-card">
-          <span className="codicon codicon-loading" />
-          {canLoad ? t('subagent.process.loading') : t('subagent.process.unavailable')}
-        </div>
+        <SubagentProcessEmptyCard canLoad={canLoad} />
       )}
     </div>
   );

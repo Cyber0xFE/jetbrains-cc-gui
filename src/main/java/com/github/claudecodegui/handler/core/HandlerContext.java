@@ -4,6 +4,7 @@ import com.github.claudecodegui.session.ClaudeSession;
 import com.github.claudecodegui.provider.claude.ClaudeSDKBridge;
 import com.github.claudecodegui.provider.codex.CodexSDKBridge;
 import com.github.claudecodegui.provider.grok.GrokSDKBridge;
+import com.github.claudecodegui.provider.zcode.ZcodeSDKBridge;
 import com.github.claudecodegui.settings.CodemossSettingsService;
 import com.intellij.openapi.project.Project;
 import com.intellij.ui.jcef.JBCefBrowser;
@@ -24,6 +25,7 @@ public class HandlerContext {
     private final ClaudeSDKBridge claudeSDKBridge;
     private final CodexSDKBridge codexSDKBridge;
     private final GrokSDKBridge grokSDKBridge;
+    private final ZcodeSDKBridge zcodeSDKBridge;
     private final CodemossSettingsService settingsService;
     private final JsCallback jsCallback;
     private final BooleanSupplier activeContentSupplier;
@@ -46,6 +48,31 @@ public class HandlerContext {
 
         default void executeJavaScript(String jsCode) {
         }
+
+        /**
+         * Capture a queued script sender bound to the originating browser and page.
+         * Implementations without lifecycle-aware delivery reject deferred replies.
+         */
+        default JsSender captureJavaScriptExecutor() {
+            return ignored -> false;
+        }
+    }
+
+    /**
+     * A queued script sender bound to the originating browser and page. Reports
+     * whether the page still accepted the script, so callers holding resources
+     * for the reply (e.g. clipboard snapshots) can release them immediately when
+     * delivery can no longer happen.
+     */
+    @FunctionalInterface
+    public interface JsSender {
+        /**
+         * Queue a script only while the captured browser page still owns the reply.
+         *
+         * @param script JavaScript to deliver to the originating page
+         * @return whether the page accepted the queued script
+         */
+        boolean send(String script);
     }
 
     public HandlerContext(
@@ -81,10 +108,26 @@ public class HandlerContext {
             BooleanSupplier activeContentSupplier,
             Supplier<String> contentTitleSupplier
     ) {
+        this(project, claudeSDKBridge, codexSDKBridge, grokSDKBridge, null, settingsService, jsCallback,
+                activeContentSupplier, contentTitleSupplier);
+    }
+
+    public HandlerContext(
+            Project project,
+            ClaudeSDKBridge claudeSDKBridge,
+            CodexSDKBridge codexSDKBridge,
+            GrokSDKBridge grokSDKBridge,
+            ZcodeSDKBridge zcodeSDKBridge,
+            CodemossSettingsService settingsService,
+            JsCallback jsCallback,
+            BooleanSupplier activeContentSupplier,
+            Supplier<String> contentTitleSupplier
+    ) {
         this.project = project;
         this.claudeSDKBridge = claudeSDKBridge;
         this.codexSDKBridge = codexSDKBridge;
         this.grokSDKBridge = grokSDKBridge;
+        this.zcodeSDKBridge = zcodeSDKBridge;
         this.settingsService = settingsService;
         this.jsCallback = jsCallback;
         this.activeContentSupplier = activeContentSupplier == null ? () -> true : activeContentSupplier;
@@ -106,6 +149,9 @@ public class HandlerContext {
 
     public GrokSDKBridge getGrokSDKBridge() {
         return grokSDKBridge;
+    }
+    public ZcodeSDKBridge getZcodeSDKBridge() {
+        return zcodeSDKBridge;
     }
 
     public CodemossSettingsService getSettingsService() {
@@ -205,8 +251,20 @@ public class HandlerContext {
     }
 
     /**
-     * Execute JavaScript through the window's ordered webview event queue
-     * (which marshals to the EDT and batches with callback events).
+     * Capture a lifecycle-bound queued reply before scheduling asynchronous handler work.
+     * The queue preserves the original browser/page rather than targeting whichever page is current later.
+     */
+    public JsSender captureJavaScriptExecutor() {
+        if (this.disposed) {
+            return ignored -> false;
+        }
+        JsSender reply = this.jsCallback.captureJavaScriptExecutor();
+        return jsCode -> !this.disposed && reply.send(jsCode);
+    }
+
+    /**
+     * Execute JavaScript through the window's ordered webview event queue.
+     * The queue marshals to the EDT and batches with callback events.
      */
     public void executeJavaScriptQueued(String jsCode) {
         if (this.disposed || this.jsCallback == null) {

@@ -1,13 +1,7 @@
 /**
  * Codex utility functions.
- * Logging, environment config, SDK initialization, reconnect helpers, and error handling.
+ * Logging, environment config, reconnect helpers, and error handling.
  */
-
-import { loadCodexSdk, isCodexSdkAvailable } from '../../utils/sdk-loader.js';
-import { CodexPermissionMapper } from '../../utils/permission-mapper.js';
-
-// SDK cache
-let codexSdk = null;
 
 // ========== Debug Logging Configuration ==========
 // Log levels: 0 = off, 1 = errors only, 2 = warnings, 3 = info, 4 = debug, 5 = verbose
@@ -29,6 +23,7 @@ export function debugLog(level, tag, ...args) {
 export const logWarn = (tag, ...args) => debugLog(2, tag, ...args);
 export const logInfo = (tag, ...args) => debugLog(3, tag, ...args);
 export const logDebug = (tag, ...args) => debugLog(4, tag, ...args);
+export const CODEX_NATIVE_AUTO_REVIEW_MIN_VERSION = '0.146.0';
 export const VALID_SANDBOX_MODES = new Set(['read-only', 'workspace-write', 'danger-full-access']);
 export const VALID_APPROVAL_POLICIES = new Set(['never', 'on-request', 'on-failure']);
 // Note: 'untrusted' was removed in Codex CLI v0.149.0 - its semantics were merged
@@ -110,11 +105,11 @@ export function buildCodexCliEnvironment(baseEnv) {
     if (typeof rawValue !== 'string' || rawValue.length === 0) {
       continue;
     }
-    if (CODEX_CLI_ENV_BLOCKLIST.has(key)) {
+    const normalizedKey = key.toUpperCase();
+    if (CODEX_CLI_ENV_BLOCKLIST.has(normalizedKey)) {
       removedKeys.push(key);
       continue;
     }
-    const normalizedKey = key.toUpperCase();
     if (normalizedKey === CODEX_PROXY_ENV_OPT_IN ||
         (!inheritProxyEnvironment && PROXY_ENV_KEYS.has(normalizedKey))) {
       removedKeys.push(key);
@@ -126,6 +121,46 @@ export function buildCodexCliEnvironment(baseEnv) {
   return { cliEnv, removedKeys };
 }
 
+/**
+ * Adds an explicit native approval reviewer to a settings object.
+ * The persistent app-server service sends this value through thread/turn
+ * settings; it is retained here for legacy probe compatibility.
+ *
+ * @param {object} codexOptions
+ * @param {object} permissionConfig
+ * @returns {object}
+ */
+export function applyCodexApprovalsReviewerConfig(codexOptions, permissionConfig) {
+  const approvalsReviewer = permissionConfig?.approvalsReviewer || 'user';
+  codexOptions.config = {
+    ...(codexOptions.config || {}),
+    approvals_reviewer: approvalsReviewer
+  };
+  return codexOptions;
+}
+
+/**
+ * Check whether an installed Codex CLI can honor approvals_reviewer.
+ * @param {string|null|undefined} version
+ * @returns {boolean}
+ */
+export function isCodexNativeAutoReviewSupported(version) {
+  const actual = typeof version === 'string' ? version.trim().match(/^(?:v)?(\d+)\.(\d+)\.(\d+)/) : null;
+  const required = CODEX_NATIVE_AUTO_REVIEW_MIN_VERSION.match(/^(\d+)\.(\d+)\.(\d+)/);
+  if (!actual || !required) {
+    return false;
+  }
+
+  for (let index = 1; index <= 3; index += 1) {
+    const actualPart = Number(actual[index]);
+    const requiredPart = Number(required[index]);
+    if (actualPart !== requiredPart) {
+      return actualPart > requiredPart;
+    }
+  }
+  return true;
+}
+
 export function normalizeCodexPermissionMode(mode) {
   if (typeof mode !== 'string') {
     return 'default';
@@ -134,7 +169,11 @@ export function normalizeCodexPermissionMode(mode) {
   if (!trimmed) {
     return 'default';
   }
-  if (trimmed === 'autoEdit') {
+  const normalized = trimmed.toLowerCase();
+  if (normalized === 'auto') {
+    return 'auto';
+  }
+  if (normalized === 'autoedit') {
     return 'acceptEdits';
   }
   return trimmed;
@@ -159,22 +198,6 @@ export const emitStatusMessage = (emitMessage, message) => {
   if (!status) return;
   emitMessage({ type: 'status', message: status });
 };
-
-/**
- * Ensure Codex SDK is loaded.
- */
-export async function ensureCodexSdk() {
-  if (!codexSdk) {
-    if (!isCodexSdkAvailable()) {
-      const error = new Error('Codex SDK not installed. Please install via Settings > Dependencies.');
-      error.code = 'SDK_NOT_INSTALLED';
-      error.provider = 'codex';
-      throw error;
-    }
-    codexSdk = await loadCodexSdk();
-  }
-  return codexSdk;
-}
 
 export const MAX_TOOL_RESULT_CHARS = 20000;
 export const RAW_EVENT_LOG_MAX_CHARS = 12000;
@@ -211,9 +234,25 @@ export function buildErrorPayload(error) {
                          rawError.includes('network') ||
                          rawError.includes('fetch failed');
 
+  // Codex holds a persistent per-thread writer lock while a turn runs. This
+  // error means another live Codex process was still writing the thread when
+  // this turn tried to resume it — a local process overlap, NOT an expired
+  // server-side thread. It must not be reported as "create a new session".
+  const isThreadWriterConflict = rawError.includes('already has an active writer');
+
   let userMessage;
 
-  if (isAuthError) {
+  if (isThreadWriterConflict) {
+    userMessage = [
+      'Codex thread is busy:',
+      `- Error message: ${rawError}`,
+      '',
+      'Another Codex process was still writing this thread when this turn started.',
+      'The plugin now stops the previous turn automatically before sending.',
+      'Please wait a few seconds and resend this message.',
+      'You do NOT need to create a new session.'
+    ].join('\n');
+  } else if (isAuthError) {
     userMessage = [
       'Codex authentication error:',
       `- Error message: ${rawError}`,
@@ -251,7 +290,8 @@ export function buildErrorPayload(error) {
       rawError,
       errorName,
       isAuthError,
-      isNetworkError
+      isNetworkError,
+      isThreadWriterConflict
     }
   };
 }

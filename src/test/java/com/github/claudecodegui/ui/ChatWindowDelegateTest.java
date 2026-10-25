@@ -1,6 +1,11 @@
 package com.github.claudecodegui.ui;
 
+import com.github.claudecodegui.bridge.EnvironmentConfigurator;
+import com.github.claudecodegui.handler.PermissionHandler;
 import com.github.claudecodegui.handler.SettingsHandler;
+import com.github.claudecodegui.handler.core.HandlerContext;
+import com.github.claudecodegui.provider.common.BaseSDKBridge;
+import com.github.claudecodegui.provider.grok.GrokSDKBridge;
 import com.github.claudecodegui.session.ClaudeSession;
 import com.github.claudecodegui.session.SessionLifecycleManager;
 import com.github.claudecodegui.session.StreamMessageCoalescer;
@@ -9,13 +14,18 @@ import com.google.gson.JsonParser;
 import org.junit.Test;
 
 import javax.swing.JPanel;
+import java.lang.reflect.Field;
+import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertTrue;
 
 /**
@@ -90,6 +100,33 @@ public class ChatWindowDelegateTest {
     }
 
     /**
+     * Grok's daemon copies CLAUDE_SESSION_ID once, at launch, from this bridge.
+     * PermissionService only watches ask-user-question files under the same key.
+     */
+    @Test
+    public void applySessionIdPublishesRoutingKeyIntoGrokPermissionEnv() throws Exception {
+        GrokSDKBridge aligned = new GrokSDKBridge();
+        GrokSDKBridge untouched = new GrokSDKBridge();
+        ChatWindowDelegate delegate = new ChatWindowDelegate(grokHost(aligned));
+        String routingKey = "4059a713-e5b9-4c83-858e-aadacc8cd6ca";
+
+        invokeApplySessionId(delegate, routingKey);
+
+        Map<String, String> alignedEnv = permissionEnv(aligned);
+        Map<String, String> untouchedEnv = permissionEnv(untouched);
+        assertEquals(routingKey, aligned.getSessionId());
+        assertEquals(routingKey, alignedEnv.get("CLAUDE_SESSION_ID"));
+        assertNotEquals(routingKey, untouchedEnv.get("CLAUDE_SESSION_ID"));
+    }
+
+    /** A window that has not created a Grok bridge must still accept the routing key. */
+    @Test
+    public void applySessionIdSkipsAMissingGrokBridge() throws Exception {
+        ChatWindowDelegate delegate = new ChatWindowDelegate(grokHost(null));
+        invokeApplySessionId(delegate, "4059a713-e5b9-4c83-858e-aadacc8cd6ca");
+    }
+
+    /**
      * Creates a behavior-level delegate with minimal safe lifecycle collaborators and records
      * every Java-to-frontend function invocation in call order.
      */
@@ -120,9 +157,28 @@ public class ChatWindowDelegateTest {
                 (StreamMessageCoalescer.JsCallbackTarget) Proxy.newProxyInstance(
                         StreamMessageCoalescer.JsCallbackTarget.class.getClassLoader(),
                         new Class<?>[]{StreamMessageCoalescer.JsCallbackTarget.class},
-                        (proxy, method, args) -> defaultValue(method.getReturnType())
+                        (proxy, method, args) -> {
+                            if ("callJavaScript".equals(method.getName())
+                                    || "isAvailable".equals(method.getName())) {
+                                return true;
+                            }
+                            return defaultValue(method.getReturnType());
+                        }
                 );
         StreamMessageCoalescer coalescer = new StreamMessageCoalescer(coalescerTarget);
+        // handleFrontendReady replays pending dialogs through the host's permission
+        // handler, so the double needs a real (empty) one rather than a null.
+        PermissionHandler permissionHandler = new PermissionHandler(new HandlerContext(
+                null,
+                null,
+                null,
+                null,
+                (HandlerContext.JsCallback) Proxy.newProxyInstance(
+                        HandlerContext.JsCallback.class.getClassLoader(),
+                        new Class<?>[]{HandlerContext.JsCallback.class},
+                        (proxy, method, args) -> defaultValue(method.getReturnType())
+                )
+        ));
 
         ChatWindowDelegate.DelegateHost host =
                 (ChatWindowDelegate.DelegateHost) Proxy.newProxyInstance(
@@ -138,6 +194,8 @@ public class ChatWindowDelegateTest {
                                     return lifecycleManager;
                                 case "getStreamCoalescer":
                                     return coalescer;
+                                case "getPermissionHandler":
+                                    return permissionHandler;
                                 case "isRuntimeRecoveryPage":
                                     return runtimeRecovery;
                                 case "callJavaScript":
@@ -149,6 +207,38 @@ public class ChatWindowDelegateTest {
                         }
                 );
         return new ChatWindowDelegate(host);
+    }
+
+    private static ChatWindowDelegate.DelegateHost grokHost(GrokSDKBridge grokSDKBridge) {
+        return (ChatWindowDelegate.DelegateHost) Proxy.newProxyInstance(
+                ChatWindowDelegate.DelegateHost.class.getClassLoader(),
+                new Class<?>[]{ChatWindowDelegate.DelegateHost.class},
+                (proxy, method, args) -> {
+                    if ("getGrokSDKBridge".equals(method.getName())) {
+                        return grokSDKBridge;
+                    }
+                    if ("getCliBridges".equals(method.getName())) {
+                        return Map.of();
+                    }
+                    return defaultValue(method.getReturnType());
+                }
+        );
+    }
+
+    private static void invokeApplySessionId(ChatWindowDelegate delegate, String routingKey) throws Exception {
+        Method apply = ChatWindowDelegate.class.getDeclaredMethod("applySessionIdToBridges", String.class);
+        apply.setAccessible(true);
+        apply.invoke(delegate, routingKey);
+    }
+
+    /** Permission block written into the daemon environment before process start. */
+    private static Map<String, String> permissionEnv(GrokSDKBridge bridge) throws Exception {
+        Field field = BaseSDKBridge.class.getDeclaredField("envConfigurator");
+        field.setAccessible(true);
+        EnvironmentConfigurator configurator = (EnvironmentConfigurator) field.get(bridge);
+        Map<String, String> env = new HashMap<>();
+        configurator.configurePermissionEnv(env);
+        return env;
     }
 
     /** Returns the JVM default value for an unneeded method on a dynamic test collaborator. */

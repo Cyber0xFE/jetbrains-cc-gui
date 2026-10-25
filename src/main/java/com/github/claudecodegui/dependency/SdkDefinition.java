@@ -24,17 +24,6 @@ public enum SdkDefinition {
         Arrays.asList("0.3.220", "0.3.201", "0.3.182"),
         "Claude AI 提供商所需，包含 Agent SDK 和 Bedrock 支持。",
         "0.3.182" // minRequiredVersion — Fable tier (ANTHROPIC_DEFAULT_FABLE_MODEL) needs SDK >= 0.3.182
-    ),
-
-    CODEX_SDK(
-        "codex-sdk",
-        "Codex SDK",
-        "@openai/codex-sdk",
-        "latest",
-        Collections.emptyList(),
-        Arrays.asList("0.117.0", "0.116.0", "0.115.0"),
-        "Codex AI 提供商所需。",
-        null // minRequiredVersion — no enforced minimum
     );
 
     private final String id;
@@ -89,7 +78,7 @@ public enum SdkDefinition {
 
     /**
      * Minimum installed version required for full feature support.
-     * The Claude SDK needs 0.3.182 or later for the Fable tier; Codex has no minimum.
+     * Claude needs 0.3.182 or later for the Fable tier.
      * Null means no minimum is enforced.
      */
     public String getMinRequiredVersion() {
@@ -135,8 +124,6 @@ public enum SdkDefinition {
     public static SdkDefinition fromProvider(String provider) {
         if ("claude".equalsIgnoreCase(provider)) {
             return CLAUDE_SDK;
-        } else if ("codex".equalsIgnoreCase(provider)) {
-            return CODEX_SDK;
         }
         return null;
     }

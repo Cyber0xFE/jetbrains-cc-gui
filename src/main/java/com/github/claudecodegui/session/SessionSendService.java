@@ -8,6 +8,7 @@ import com.github.claudecodegui.provider.claude.ClaudeSDKBridge;
 import com.github.claudecodegui.provider.codex.CodexSDKBridge;
 import com.github.claudecodegui.provider.grok.GrokSDKBridge;
 import com.github.claudecodegui.provider.common.MarkerCliBridge;
+import com.github.claudecodegui.provider.zcode.ZcodeSDKBridge;
 import com.github.claudecodegui.provider.common.MessageCallback;
 import com.google.gson.Gson;
 import com.google.gson.JsonObject;
@@ -36,6 +37,7 @@ public class SessionSendService {
     private final ClaudeSDKBridge claudeSDKBridge;
     private final CodexSDKBridge codexSDKBridge;
     private final GrokSDKBridge grokSDKBridge;
+    private final ZcodeSDKBridge zcodeSDKBridge;
     private final Map<String, MarkerCliBridge> cliBridges;
     private final SessionContextService contextService;
 
@@ -68,6 +70,24 @@ public class SessionSendService {
             SessionContextService contextService,
             GrokSDKBridge grokSDKBridge
     ) {
+        this(project, state, callbackFacade, messageParser, messageMerger, gson,
+                claudeSDKBridge, codexSDKBridge, cliBridges, contextService, grokSDKBridge, null);
+    }
+
+    public SessionSendService(
+            Project project,
+            SessionState state,
+            SessionCallbackFacade callbackFacade,
+            MessageParser messageParser,
+            MessageMerger messageMerger,
+            Gson gson,
+            ClaudeSDKBridge claudeSDKBridge,
+            CodexSDKBridge codexSDKBridge,
+            Map<String, MarkerCliBridge> cliBridges,
+            SessionContextService contextService,
+            GrokSDKBridge grokSDKBridge,
+            ZcodeSDKBridge zcodeSDKBridge
+    ) {
         this.project = project;
         this.state = state;
         this.callbackFacade = callbackFacade;
@@ -77,6 +97,7 @@ public class SessionSendService {
         this.claudeSDKBridge = claudeSDKBridge;
         this.codexSDKBridge = codexSDKBridge;
         this.grokSDKBridge = grokSDKBridge;
+        this.zcodeSDKBridge = zcodeSDKBridge;
         this.cliBridges = cliBridges != null ? cliBridges : Collections.emptyMap();
         this.contextService = contextService;
     }
@@ -86,9 +107,14 @@ public class SessionSendService {
         contextCollector.setAutoOpenFileEnabled(readAutoOpenFileEnabled());
     }
 
-    public void updateSessionStateForSend(ClaudeSession.Message userMessage, String normalizedInput) {
-        state.addMessage(userMessage);
-        callbackFacade.notifyMessageUpdate(state.getMessages());
+    public Object updateSessionStateForSend(ClaudeSession.Message userMessage, String normalizedInput) {
+        Object turnOwner;
+        // Fence previous callbacks before publishing the new question and busy state.
+        synchronized (state.getMessageStateLock()) {
+            turnOwner = state.beginTurn();
+            state.addMessage(userMessage);
+            callbackFacade.notifyMessageUpdate(state.getMessages());
+        }
 
         if (state.getSummary() == null) {
             String baseSummary = (userMessage.content != null && !userMessage.content.isEmpty())
@@ -100,11 +126,9 @@ public class SessionSendService {
         }
 
         state.updateLastModifiedTime();
-        state.setError(null);
-        state.setBusy(true);
-        state.setLoading(true);
         ClaudeNotifier.setWaiting(project);
         callbackFacade.notifyStateChange(state.isBusy(), state.isLoading(), state.getError());
+        return turnOwner;
     }
 
     public CompletableFuture<Void> sendMessageToProvider(
@@ -118,6 +142,78 @@ public class SessionSendService {
             String requestedReasoningEffort,
             String requestedCodexFastMode,
             String requestedDshPreset
+    ) {
+        return sendMessageToProvider(
+                channelId, input, attachments, openedFilesJson, externalAgentPrompt,
+                fileTagPaths, requestedPermissionMode, requestedReasoningEffort,
+                requestedCodexFastMode, requestedDshPreset, null, null);
+    }
+
+    /**
+     * Send a message while preserving the frontend's native client identity.
+     *
+     * @param channelId chat host identifier
+     * @param input normalized user input
+     * @param attachments user attachments
+     * @param openedFilesJson editor context
+     * @param externalAgentPrompt selected role instructions
+     * @param fileTagPaths selected file references
+     * @param requestedPermissionMode requested permission mode
+     * @param requestedReasoningEffort requested reasoning effort
+     * @param requestedCodexFastMode requested Codex service tier
+     * @param requestedDshPreset requested DSH preset
+     * @param clientMessageId stable optimistic-message identity
+     * @return future completed after the provider turn has finished
+     */
+    public CompletableFuture<Void> sendMessageToProvider(
+            String channelId,
+            String input,
+            List<ClaudeSession.Attachment> attachments,
+            JsonObject openedFilesJson,
+            String externalAgentPrompt,
+            List<String> fileTagPaths,
+            String requestedPermissionMode,
+            String requestedReasoningEffort,
+            String requestedCodexFastMode,
+            String requestedDshPreset,
+            String clientMessageId
+    ) {
+        return sendMessageToProvider(
+                channelId, input, attachments, openedFilesJson, externalAgentPrompt,
+                fileTagPaths, requestedPermissionMode, requestedReasoningEffort,
+                requestedCodexFastMode, requestedDshPreset, clientMessageId, null);
+    }
+
+    /**
+     * Send a message with stable identity and native Codex settings.
+     *
+     * @param channelId chat host identifier
+     * @param input normalized user input
+     * @param attachments user attachments
+     * @param openedFilesJson editor context
+     * @param externalAgentPrompt selected role instructions
+     * @param fileTagPaths selected file references
+     * @param requestedPermissionMode requested permission mode
+     * @param requestedReasoningEffort requested reasoning effort
+     * @param requestedCodexFastMode requested Codex service tier
+     * @param requestedDshPreset requested DSH preset
+     * @param clientMessageId stable optimistic-message identity
+     * @param nativeCodexSettings filtered native Codex settings
+     * @return future completed after the provider turn has finished
+     */
+    public CompletableFuture<Void> sendMessageToProvider(
+            String channelId,
+            String input,
+            List<ClaudeSession.Attachment> attachments,
+            JsonObject openedFilesJson,
+            String externalAgentPrompt,
+            List<String> fileTagPaths,
+            String requestedPermissionMode,
+            String requestedReasoningEffort,
+            String requestedCodexFastMode,
+            String requestedDshPreset,
+            String clientMessageId,
+            JsonObject nativeCodexSettings
     ) {
         String agentPrompt = externalAgentPrompt;
         if (agentPrompt == null) {
@@ -159,12 +255,26 @@ public class SessionSendService {
                     fileTagPaths,
                     effectivePermissionMode,
                     normalizedRequestedEffort,
-                    effectiveCodexServiceTier
+                    effectiveCodexServiceTier,
+                    clientMessageId,
+                    nativeCodexSettings
             );
         }
 
         if ("grok".equals(currentProvider) && grokSDKBridge != null) {
             return sendToGrok(
+                    channelId,
+                    input,
+                    attachments,
+                    openedFilesJson,
+                    agentPrompt,
+                    fileTagPaths,
+                    effectivePermissionMode,
+                    normalizedRequestedEffort
+            );
+        }
+        if ("zcode".equals(currentProvider) && zcodeSDKBridge != null) {
+            return sendToZcode(
                     channelId,
                     input,
                     attachments,
@@ -220,6 +330,9 @@ public class SessionSendService {
         if (trimmed.isEmpty()) {
             return null;
         }
+        if ("autoEdit".equals(trimmed)) {
+            return "acceptEdits";
+        }
         if (SessionState.isValidPermissionMode(trimmed)) {
             return trimmed;
         }
@@ -236,14 +349,22 @@ public class SessionSendService {
             resolvedMode = "default";
         }
 
-        // Codex and Grok run as full SDK bridges (not MarkerCli providers, so they
+        boolean isProviderWithoutPlanMode = "grok".equals(provider)
+                || "zcode".equals(provider)
+                || (SessionProviderRouter.isCliProvider(provider) && !"omp".equals(provider));
+        boolean isCliProviderWithoutNativeAuto = SessionProviderRouter.isCliProvider(provider);
+        // Grok and ZCode run as full SDK bridges (not MarkerCli providers, so they
         // are absent from CLI_PROVIDER_IDS), but like the headless CLI providers
         // they have no plan-mode equivalent — so plan still downgrades to default.
         // EXCEPT omp, where "plan" is a model role (`omp --model plan`), not Claude
-        // plan mode.
-        if (("codex".equals(provider) || "grok".equals(provider)
-                || (SessionProviderRouter.isCliProvider(provider) && !"omp".equals(provider)))
+        // plan mode. Codex owns its native collaboration mode in app-server;
+        // native auto review is limited to Claude/Codex; Grok retains its
+        // existing internal auto-approve alias, while the Webview still hides auto there.
+        if (isProviderWithoutPlanMode
                 && "plan".equals(resolvedMode)) {
+            return "default";
+        }
+        if (isCliProviderWithoutNativeAuto && "auto".equals(resolvedMode)) {
             return "default";
         }
         return resolvedMode;
@@ -311,9 +432,12 @@ public class SessionSendService {
             List<String> fileTagPaths,
             String effectivePermissionMode,
             String requestedReasoningEffort,
-            String effectiveCodexServiceTier
+            String effectiveCodexServiceTier,
+            String clientMessageId,
+            JsonObject nativeCodexSettings
     ) {
-        CodexMessageHandler handler = new CodexMessageHandler(state, callbackFacade.getCallbackHandler());
+        CodexMessageHandler handler = new CodexMessageHandler(this.state,
+                this.callbackFacade.getCallbackHandler(), clientMessageId);
         String accessMode = CodemossSettingsService.CODEX_RUNTIME_ACCESS_INACTIVE;
         try {
             accessMode = new CodemossSettingsService().getCodexRuntimeAccessMode();
@@ -327,7 +451,8 @@ public class SessionSendService {
             return CompletableFuture.completedFuture(null);
         }
 
-        String contextAppend = contextService.buildCodexContextAppend(openedFilesJson, fileTagPaths);
+        String contextAppend = this.contextService.buildCodexContextAppend(openedFilesJson, fileTagPaths);
+        String sessionInstructions = this.contextService.buildCodexSessionInstructions(agentPrompt, openedFilesJson);
         String finalInput = (input != null ? input : "") + contextAppend;
         String configuredModel = new CodexSettingsManager(gson).resolveModelAlias(state.getModel());
 
@@ -339,10 +464,12 @@ public class SessionSendService {
                 attachments,
                 effectivePermissionMode,
                 configuredModel,
-                agentPrompt,
+                sessionInstructions,
                 requestedReasoningEffort != null ? requestedReasoningEffort : state.getReasoningEffort(),
                 effectiveCodexServiceTier,
-                handler
+                handler,
+                clientMessageId,
+                nativeCodexSettings
         ).thenApply(result -> null);
     }
 
@@ -398,6 +525,58 @@ public class SessionSendService {
         ).thenApply(result -> null);
     }
 
+    private CompletableFuture<Void> sendToZcode(
+            String channelId,
+            String input,
+            List<ClaudeSession.Attachment> attachments,
+            JsonObject openedFilesJson,
+            String agentPrompt,
+            List<String> fileTagPaths,
+            String effectivePermissionMode,
+            String requestedReasoningEffort
+    ) {
+        if (zcodeSDKBridge == null) {
+            LOG.error("[Lifecycle] sendToZcode called but ZcodeSDKBridge is null");
+            callbackFacade.notifyStateChange(false, false, "ZCode bridge not available");
+            return CompletableFuture.completedFuture(null);
+        }
+        ZcodeMessageHandler handler = new ZcodeMessageHandler(state, callbackFacade.getCallbackHandler());
+        Boolean streaming = readStreamingEnabled();
+        final String runtimeSessionEpoch = state.getRuntimeSessionEpoch();
+        final String currentModel = state.getModel();
+        String projectBase = project != null ? project.getBasePath() : null;
+        String guardedCwd = com.github.claudecodegui.util.PathUtils.guardWorkingDirectory(
+                state.getCwd(), projectBase);
+        if (guardedCwd == null) {
+            guardedCwd = state.getCwd();
+        } else if (state.getCwd() == null || !guardedCwd.equals(state.getCwd())) {
+            LOG.warn("[Lifecycle] sendToZcode cwd guard: " + state.getCwd() + " -> " + guardedCwd);
+            state.setCwd(guardedCwd);
+        }
+        LOG.info("[Lifecycle] sendToZcode sessionId=" + (state.getSessionId() != null ? state.getSessionId() : "(new)")
+                + ", epoch=" + runtimeSessionEpoch
+                + ", cwd=" + guardedCwd
+                + ", model=" + currentModel
+                + ", fileTags=" + (fileTagPaths != null ? fileTagPaths.size() : 0));
+
+        return zcodeSDKBridge.sendMessage(
+                channelId,
+                input,
+                state.getSessionId(),
+                runtimeSessionEpoch,
+                guardedCwd,
+                attachments,
+                effectivePermissionMode,
+                currentModel,
+                openedFilesJson,
+                agentPrompt,
+                streaming,
+                false,
+                requestedReasoningEffort != null ? requestedReasoningEffort : state.getReasoningEffort(),
+                handler
+        ).thenApply(result -> null);
+    }
+
     private CompletableFuture<Void> sendToCliProvider(
             String provider,
             String channelId,
@@ -420,7 +599,7 @@ public class SessionSendService {
         // dupes). Other CLI providers reuse Codex streaming marker handling.
         MessageCallback handler = createCliMessageHandler(provider);
 
-        String contextAppend = contextService.buildCodexContextAppend(openedFilesJson, fileTagPaths);
+        String contextAppend = this.contextService.buildLegacyContextAppend(openedFilesJson, fileTagPaths);
         String finalInput = (input != null ? input : "") + contextAppend;
         if (agentPrompt != null && !agentPrompt.isEmpty()) {
             finalInput = finalInput + "\n\n## Agent Role and Instructions\n\n" + agentPrompt;
@@ -435,6 +614,7 @@ public class SessionSendService {
         String effectiveMode = permissionMode != null && !permissionMode.isBlank()
                 ? permissionMode
                 : "default";
+        Boolean thinking = readThinkingEnabled();
         int attachmentCount = attachments != null ? attachments.size() : 0;
 
         LOG.info("[Lifecycle] sendToCli provider=" + provider
@@ -444,6 +624,7 @@ public class SessionSendService {
                 + ", modelCli=" + (modelForCli != null ? modelForCli : "(config-default)")
                 + ", effort=" + effort
                 + ", permissionMode=" + effectiveMode
+                + ", thinking=" + (thinking == null || thinking)
                 + ", attachments=" + attachmentCount);
 
         return bridge.sendMessage(
@@ -456,8 +637,28 @@ public class SessionSendService {
                 attachments,
                 effectiveMode,
                 "dsh".equals(provider) ? state.getDshPreset() : null,
+                thinking,
                 handler
         ).thenApply(result -> null);
+    }
+
+    /**
+     * Plugin "always thinking" toggle for CLI providers. Same source as the
+     * webview toggle: provider settingsConfig first, Claude settings.json as
+     * fallback; null lets the daemon apply its default (enabled).
+     */
+    private Boolean readThinkingEnabled() {
+        try {
+            CodemossSettingsService settingsService = new CodemossSettingsService();
+            Boolean providerLevel = settingsService.getAlwaysThinkingEnabledInActiveProvider();
+            if (providerLevel != null) {
+                return providerLevel;
+            }
+            return settingsService.getAlwaysThinkingEnabledFromClaudeSettings();
+        } catch (Exception e) {
+            LOG.warn("[Thinking] Failed to read thinking config: " + e.getMessage());
+        }
+        return null;
     }
 
     /**
@@ -469,6 +670,9 @@ public class SessionSendService {
         CallbackHandler callbacks = callbackFacade.getCallbackHandler();
         if ("grok".equals(provider)) {
             return new GrokMessageHandler(state, callbacks);
+        }
+        if ("zcode".equals(provider)) {
+            return new ZcodeMessageHandler(state, callbacks);
         }
         return new CodexMessageHandler(state, callbacks);
     }

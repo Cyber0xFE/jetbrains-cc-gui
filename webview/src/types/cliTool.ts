@@ -3,7 +3,7 @@
  * Detection only — the plugin never auto-installs these binaries.
  */
 
-export type CliToolId = 'grok' | 'kimi' | 'opencode' | 'pi' | 'dsh' | 'omp';
+export type CliToolId = 'codex' | 'grok' | 'kimi' | 'opencode' | 'pi' | 'dsh' | 'omp' | 'minimax' | 'zcode';
 
 export interface CliToolStatus {
   id: CliToolId;
@@ -40,6 +40,16 @@ export interface CliToolDefinition {
  * and are shown in a dialog — never executed by the plugin.
  */
 export const CLI_TOOL_DEFINITIONS: CliToolDefinition[] = [
+  {
+    id: 'codex',
+    nameKey: 'settings.cli.tools.codex.name',
+    descriptionKey: 'settings.cli.tools.codex.description',
+    binaryName: 'codex',
+    docsUrl: 'https://learn.chatgpt.com/docs/codex/cli#getting-started',
+    installCommand: 'curl -fsSL https://chatgpt.com/codex/install.sh | sh',
+    installCommandWindows: 'powershell -ExecutionPolicy ByPass -c "irm https://chatgpt.com/codex/install.ps1 | iex"',
+    altInstallCommand: 'npm install -g @openai/codex',
+  },
   {
     id: 'grok',
     nameKey: 'settings.cli.tools.grok.name',
@@ -92,5 +102,28 @@ export const CLI_TOOL_DEFINITIONS: CliToolDefinition[] = [
     docsUrl: 'https://omp.sh/',
     installCommand: 'curl -fsSL https://omp.sh/install.sh | sh',
     altInstallCommand: 'npm install -g @oh-my-pi/pi-coding-agent',
+  },
+  {
+    id: 'minimax',
+    nameKey: 'settings.cli.tools.minimax.name',
+    descriptionKey: 'settings.cli.tools.minimax.description',
+    binaryName: 'minimax / mcode',
+    // npmjs.com is a Cloudflare-guarded SPA that renders blank inside the
+    // IDE's JCEF browser; the npmmirror package page serves the same official
+    // README server-side and is reachable in CN.
+    docsUrl: 'https://www.npmmirror.com/package/@minimax-ai/code',
+    installCommand: 'npm install -g @minimax-ai/code',
+    installCommandWindows: 'npm install -g @minimax-ai/code',
+  },
+  {
+    id: 'zcode',
+    nameKey: 'settings.cli.tools.zcode.name',
+    descriptionKey: 'settings.cli.tools.zcode.description',
+    binaryName: 'zcode',
+    docsUrl: 'https://zcode.z.ai/cn',
+    // Desktop app, not a shell-installable CLI — install is downloading the
+    // app from the site, so the "command" slot carries the download page.
+    installCommand: 'https://zcode.z.ai/cn',
+    installCommandWindows: 'https://zcode.z.ai/cn',
   },
 ];

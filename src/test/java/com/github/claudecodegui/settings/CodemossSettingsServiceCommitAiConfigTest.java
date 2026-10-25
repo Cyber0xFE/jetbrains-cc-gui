@@ -1,14 +1,17 @@
 package com.github.claudecodegui.settings;
 
+import com.github.claudecodegui.cli.CliStatusDetector;
 import com.github.claudecodegui.util.PlatformUtils;
 import com.google.gson.JsonObject;
 import org.junit.After;
+import org.junit.Before;
 import org.junit.Test;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.attribute.PosixFilePermissions;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -17,6 +20,11 @@ import static org.junit.Assert.fail;
 
 public class CodemossSettingsServiceCommitAiConfigTest {
     private String originalHomeDir;
+
+    @Before
+    public void setUp() {
+        resetCliStatusDetectorCache();
+    }
 
     @After
     public void tearDown() throws Exception {
@@ -33,6 +41,7 @@ public class CodemossSettingsServiceCommitAiConfigTest {
         writeConfig(tempHome, "claude-a", "codex-a");
         installSdk(tempHome, "claude-sdk", "@anthropic-ai/claude-agent-sdk", "0.2.88");
         installSdk(tempHome, "codex-sdk", "@openai/codex-sdk", "0.117.0");
+        installLegacyCodexCli(tempHome);
 
         CodemossSettingsService service = new CodemossSettingsService();
 
@@ -54,6 +63,7 @@ public class CodemossSettingsServiceCommitAiConfigTest {
         writeConfig(tempHome, "claude-a", "codex-a");
         installSdk(tempHome, "claude-sdk", "@anthropic-ai/claude-agent-sdk", "0.2.88");
         installSdk(tempHome, "codex-sdk", "@openai/codex-sdk", "0.117.0");
+        installLegacyCodexCli(tempHome);
 
         CodemossSettingsService service = new CodemossSettingsService();
 
@@ -102,16 +112,17 @@ public class CodemossSettingsServiceCommitAiConfigTest {
         writeConfig(tempHome, "claude-a", "codex-a");
         installSdk(tempHome, "claude-sdk", "@anthropic-ai/claude-agent-sdk", "0.2.88");
         installSdk(tempHome, "codex-sdk", "@openai/codex-sdk", "0.117.0");
+        installLegacyCodexCli(tempHome);
 
         CodemossSettingsService service = new CodemossSettingsService();
 
-        invokeSetCommitAiConfig(service, "claude", "claude-opus-4-8", "gpt-5.4");
+        invokeSetCommitAiConfig(service, "claude", "claude-opus-5", "gpt-5.4");
         JsonObject config = invokeGetCommitAiConfig(service);
 
         assertEquals("claude", config.get("provider").getAsString());
         assertEquals("claude", config.get("effectiveProvider").getAsString());
         assertEquals("manual", config.get("resolutionSource").getAsString());
-        assertEquals("claude-opus-4-8", config.getAsJsonObject("models").get("claude").getAsString());
+        assertEquals("claude-opus-5", config.getAsJsonObject("models").get("claude").getAsString());
         assertEquals("gpt-5.4", config.getAsJsonObject("models").get("codex").getAsString());
     }
 
@@ -123,7 +134,7 @@ public class CodemossSettingsServiceCommitAiConfigTest {
 
         CodemossSettingsService service = new CodemossSettingsService();
 
-        invokeSetCommitAiConfig(service, "claude", "claude-opus-4-8", "gpt-5.4");
+        invokeSetCommitAiConfig(service, "claude", "claude-opus-5", "gpt-5.4");
         JsonObject config = invokeGetCommitAiConfig(service);
 
         assertEquals("claude", config.get("provider").getAsString());
@@ -167,22 +178,23 @@ public class CodemossSettingsServiceCommitAiConfigTest {
         writeConfig(tempHome, "claude-a", "codex-a");
         installSdk(tempHome, "claude-sdk", "@anthropic-ai/claude-agent-sdk", "0.2.88");
         installSdk(tempHome, "codex-sdk", "@openai/codex-sdk", "0.117.0");
+        installLegacyCodexCli(tempHome);
 
         CodemossSettingsService service = new CodemossSettingsService();
-        invokeSetPromptEnhancerConfig(service, "claude", "claude-opus-4-8", "gpt-5.4");
+        invokeSetPromptEnhancerConfig(service, "claude", "claude-opus-5", "gpt-5.4");
 
-        invokeSetCommitAiConfig(service, "codex", "claude-opus-4-8", "gpt-5.5");
+        invokeSetCommitAiConfig(service, "codex", "claude-opus-5", "gpt-5.5");
 
         JsonObject promptEnhancerConfig = invokeGetPromptEnhancerConfig(service);
         JsonObject commitAiConfig = invokeGetCommitAiConfig(service);
 
         assertEquals("claude", promptEnhancerConfig.get("provider").getAsString());
-        assertEquals("claude-opus-4-8", promptEnhancerConfig.getAsJsonObject("models").get("claude").getAsString());
+        assertEquals("claude-opus-5", promptEnhancerConfig.getAsJsonObject("models").get("claude").getAsString());
         assertEquals("gpt-5.4", promptEnhancerConfig.getAsJsonObject("models").get("codex").getAsString());
 
         assertEquals("codex", commitAiConfig.get("provider").getAsString());
         assertEquals("gpt-5.5", commitAiConfig.getAsJsonObject("models").get("codex").getAsString());
-        assertEquals("claude-opus-4-8", commitAiConfig.getAsJsonObject("models").get("claude").getAsString());
+        assertEquals("claude-opus-5", commitAiConfig.getAsJsonObject("models").get("claude").getAsString());
     }
 
     private JsonObject invokeGetCommitAiConfig(CodemossSettingsService service) throws Exception {
@@ -323,6 +335,48 @@ public class CodemossSettingsServiceCommitAiConfigTest {
         pkgJson.addProperty("name", npmPackage);
         pkgJson.addProperty("version", version);
         Files.writeString(packageDir.resolve("package.json"), pkgJson.toString());
+    }
+
+    /**
+     * Creates an executable stub for the legacy bundled Codex CLI at the layout
+     * {@link CliStatusDetector} probes, so codex availability does not depend on
+     * a real CLI being on the machine's PATH (CI runners have none).
+     */
+    private void installLegacyCodexCli(Path tempHome) throws Exception {
+        if (PlatformUtils.isWindows()) {
+            // Windows probes the real CLI through PATH resolution; a fake codex.exe
+            // cannot be produced here and is not needed.
+            return;
+        }
+        String platform = PlatformUtils.isMac() ? "darwin" : "linux";
+        String arch = "aarch64".equals(System.getProperty("os.arch"))
+                || "arm64".equals(System.getProperty("os.arch")) ? "aarch64" : "x86_64";
+        String triple = arch + ("darwin".equals(platform) ? "-apple-darwin" : "-unknown-linux-musl");
+        Path vendor = tempHome.resolve(".codemoss")
+                .resolve("dependencies")
+                .resolve("codex-sdk")
+                .resolve("node_modules")
+                .resolve("@openai")
+                .resolve("codex-sdk")
+                .resolve("vendor")
+                .resolve(triple)
+                .resolve("codex");
+        Files.createDirectories(vendor);
+        Path binary = vendor.resolve("codex");
+        Files.writeString(binary, "#!/bin/sh\nprintf 'codex-cli 0.117.0\\n'\n");
+        Files.setPosixFilePermissions(binary, PosixFilePermissions.fromString("rwxr-xr-x"));
+    }
+
+    /** The detector caches probe results for the whole JVM; tests need fresh probes per fixture. */
+    private void resetCliStatusDetectorCache() {
+        try {
+            Field cacheField = CliStatusDetector.class.getDeclaredField("detectAllCache");
+            cacheField.setAccessible(true);
+            cacheField.set(null, null);
+        } catch (ReflectiveOperationException ignored) {
+            // Detection then simply keeps whatever result is cached; tests that
+            // probe before the fixture exists would surface as flaky here.
+        }
     }
 
     private String getCachedHomeDirectory() throws Exception {

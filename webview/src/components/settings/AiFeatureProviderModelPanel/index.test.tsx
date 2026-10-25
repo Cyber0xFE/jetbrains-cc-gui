@@ -1,5 +1,7 @@
+import { writeClaudeModelMapping } from '../../../utils/claudeModelMapping';
+import { STORAGE_KEYS } from '../../../types/provider';
 import { readFileSync } from 'node:fs';
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import AiFeatureProviderModelPanel from './index';
 import type { CommitAiConfig } from '../../../types/aiFeatureConfig';
@@ -70,8 +72,35 @@ describe('AiFeatureProviderModelPanel', () => {
       opencode: false,
       pi: false,
       omp: false,
+      minimax: false,
+      zcode: false,
     },
   };
+
+  it.each(['local', 'storage'])('refreshes mapping labels on %s events without changing the model catalog', channel => {
+    localStorage.clear();
+    writeClaudeModelMapping({ sonnet: 'glm-flash', sonnetName: 'Old alias' });
+    const view = render(<AiFeatureProviderModelPanel
+      config={{ ...config, provider: 'claude', effectiveProvider: 'claude', models: { ...DEFAULT_AI_FEATURE_MODELS, claude: 'claude-sonnet-5' } }}
+      settingsKeyPrefix="settings.commit.providerModel" providerKeyPrefix="providers"
+    />);
+    const selector = screen.getByTestId('ai-feature-model-select');
+    expect(selector.textContent).toContain('Old alias');
+    act(() => {
+      const mapping = { sonnet: 'glm-flash', sonnetName: 'New alias' };
+      if (channel === 'local') writeClaudeModelMapping(mapping);
+      else {
+        localStorage.setItem(STORAGE_KEYS.CLAUDE_MODEL_MAPPING, JSON.stringify(mapping));
+        window.dispatchEvent(new StorageEvent('storage', { key: STORAGE_KEYS.CLAUDE_MODEL_MAPPING }));
+      }
+    });
+    expect(selector.textContent).toContain('New alias');
+    expect(selector.textContent).not.toContain('Old alias');
+    act(() => writeClaudeModelMapping({}));
+    expect(selector.textContent).not.toContain('New alias');
+    view.unmount();
+    localStorage.clear();
+  });
 
   it('renders auto mode summary without provider/model selects', () => {
     render(
@@ -138,7 +167,7 @@ describe('AiFeatureProviderModelPanel', () => {
     expect(onResetToDefault).toHaveBeenCalledTimes(1);
   });
 
-  it('lists the same 7 providers as the main chat provider selector in manual mode', () => {
+  it('lists the same 9 providers as the main chat provider selector in manual mode', () => {
     render(
       <AiFeatureProviderModelPanel
         config={{
@@ -159,15 +188,17 @@ describe('AiFeatureProviderModelPanel', () => {
     const providerRoot = screen.getByTestId('ai-feature-provider-select');
     fireEvent.click(within(providerRoot).getByRole('button'));
     const options = within(providerRoot).getAllByRole('option');
-    expect(options).toHaveLength(7);
+    expect(options).toHaveLength(9);
     const labels = options.map((opt) => opt.textContent ?? '');
     expect(labels.some((l) => /Claude/i.test(l) || /providers\.claude\.label/.test(l))).toBe(true);
     expect(labels.some((l) => /Codex/i.test(l) || /providers\.codex\.label/.test(l))).toBe(true);
     expect(labels.some((l) => /Grok/i.test(l) || /providers\.grok\.label/.test(l))).toBe(true);
     expect(labels.some((l) => /Kimi/i.test(l) || /providers\.kimi\.label/.test(l))).toBe(true);
+    expect(labels.some((l) => /MiniMax/i.test(l) || /providers\.minimax\.label/.test(l))).toBe(true);
     expect(labels.some((l) => /OpenCode/i.test(l) || /providers\.opencode\.label/.test(l))).toBe(true);
     expect(labels.some((l) => /PI/i.test(l) || /providers\.pi\.label/.test(l))).toBe(true);
     expect(labels.some((l) => /OMP/i.test(l) || /providers\.omp\.label/.test(l))).toBe(true);
+    expect(labels.some((l) => /ZCode/i.test(l) || /providers\.zcode\.label/.test(l))).toBe(true);
   });
 
   it('keeps selects compact with ellipsis instead of wrapping', () => {
@@ -203,6 +234,8 @@ describe('AiFeatureProviderModelPanel', () => {
             opencode: false,
             pi: false,
             omp: false,
+            minimax: false,
+            zcode: false,
           },
         }}
         settingsKeyPrefix="settings.basic.promptEnhancer"
@@ -220,7 +253,7 @@ describe('AiFeatureProviderModelPanel', () => {
 
     fireEvent.click(trigger);
     const options = within(providerRoot).getAllByRole('option');
-    expect(options.length).toBe(7);
+    expect(options.length).toBe(9);
     options.forEach((opt) => {
       expect((opt as HTMLButtonElement).disabled).toBe(false);
     });
@@ -357,6 +390,8 @@ describe('AiFeatureProviderModelPanel', () => {
             opencode: false,
             pi: false,
             omp: false,
+            minimax: false,
+            zcode: false,
           },
         }}
         settingsKeyPrefix="settings.basic.promptEnhancer"

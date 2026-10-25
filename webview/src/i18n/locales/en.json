@@ -73,6 +73,18 @@
     "context": "Context",
     "usage": "Usage",
     "usagePercentage": "Usage: {{percentage}}",
+    "planUsage": {
+      "title": "Claude plan usage",
+      "loading": "Loading usage…",
+      "unavailable": "Usage unavailable",
+      "dash": "Usage —",
+      "tooltipWindow": "{{period}} · {{percent}} used",
+      "tooltipReset": "Resets: {{value}} (local time)",
+      "clickToSwitch": "Click period label to switch window",
+      "worstHint": "Dot shows worst window ({{color}})",
+      "paceColors": { "green": "green", "yellow": "yellow", "red": "red", "neutral": "unknown" },
+      "stale": "Data may be outdated (refresh failed)"
+    },
     "noMatchingFiles": "No matching files",
     "noMatchingCommands": "No matching commands",
     "noMatchingHistory": "No matching history",
@@ -99,6 +111,7 @@
     "disabled": "Disabled",
     "sdkNotInstalled": "{{provider}} SDK is not installed. Please install the SDK to start chatting.",
     "sdkStatusLoading": "Checking SDK status...",
+    "pasteImagePreparing": "Preparing pasted image...",
     "sdkStatusUnavailable": "Could not check SDK status.",
     "retrySdkStatus": "Retry",
     "openSourceBanner": "This project is guaranteed to be 100% open source and free (beware of pirated projects)",
@@ -138,14 +151,32 @@
       "openTooltip": "Search in conversation (Cmd/Ctrl+F)"
     },
     "compactSummary": {
+      "receivedTime": "Recorded time",
       "summarizedConversation": "Summarized conversation",
       "compactSummary": "Compact summary",
       "messagesUpTo": "Summarized {{count}} messages up to this point",
       "messagesFrom": "Summarized {{count}} messages from this point",
       "userContext": "Context: \"{{context}}\"",
       "expand": "Expand summary",
-      "collapse": "Collapse summary"
-    }
+      "collapse": "Collapse summary",
+      "nativeCompleted": "Context compacted",
+      "nativeInProgress": "Compacting context",
+      "nativeFailed": "Compaction failed",
+      "nativeInterrupted": "Compaction interrupted",
+      "writerOccupied": "This conversation's native write lock is occupied. It may be held by this plugin's runtime or another Codex process. Check whether the conversation is still loaded in another window or in the background.",
+      "manual": "Manual",
+      "auto": "Automatic",
+      "timeUnknown": "Time unavailable",
+      "turnTime": "Turn start time"
+    },
+    "codexCompactUsage": "Use /compact without arguments",
+    "codexCompactStarted": "Codex is compacting the conversation",
+    "codexReviewUsage": "Use /review without arguments",
+    "codexReviewStarted": "Codex is reviewing the workspace",
+    "codexDiffUsage": "Use /diff without arguments",
+    "codexApprovalsUsage": "Use /approvals without arguments",
+    "codexSandboxConflict": "Codex automatic review cannot use danger-full-access. Choose workspace-write or request approval.",
+    "continueRefiningPlan": "Continue refining this plan:"
   },
   "settings": {
     "title": "Settings",
@@ -331,6 +362,7 @@
       "retryAttempts": "Retry attempts",
       "catalogColumns": "Cards per row",
       "catalogPageSize": "Items per page",
+      "catalogSort": "Sort order",
       "pageSizeOption": "{{count}} per page",
       "pageJump": "Go to",
       "goToPage": "Go to page",
@@ -479,7 +511,9 @@
           "kimi": "Kimi CLI",
           "opencode": "OpenCode",
           "pi": "PI CLI",
-          "omp": "OMP CLI"
+          "omp": "OMP CLI",
+          "minimax": "MiniMax Code",
+          "zcode": "ZCode"
         },
         "currentProviderAuto": "Currently using automatic selection: {{provider}}",
         "currentProviderManual": "Currently using manually selected provider: {{provider}}",
@@ -489,6 +523,18 @@
         "modeManual": "Manual",
         "autoSummary": "Follows the current chat CLI · currently {{provider}}",
         "autoUnavailable": "No CLI is available right now. Switch to Manual to pick one."
+      },
+      "bashGroupCollapsed": {
+        "label": "Collapse batch commands by default",
+        "enabled": "Enabled",
+        "disabled": "Disabled",
+        "hint": "Applies to batch command groups from all CLIs. When enabled, groups show only their title and execution status by default; click the title to expand the command list. When disabled, groups expand by default. Changes apply immediately; manually expanded or collapsed groups keep their state."
+      },
+      "editGroupCollapsed": {
+        "label": "Collapse batch file edits by default",
+        "enabled": "Enabled",
+        "disabled": "Disabled",
+        "hint": "Applies to batch file edit groups from all CLIs. When enabled, groups show their title, edit count, added/deleted line counts, and execution status by default; click the title to expand the file list. When disabled, groups expand by default. Multiple edits to the same file are counted separately. Changes apply immediately; manually expanded or collapsed groups keep their state. Expand diffs by default controls inline diffs for individual edits; it does not control whether batch groups expand."
       },
       "diffExpanded": {
         "label": "Expand diffs by default",
@@ -635,6 +681,18 @@
       "copied": "Copied to clipboard",
       "copyFailed": "Failed to copy",
       "tools": {
+        "codex": {
+          "name": "Codex CLI",
+          "description": "Detect the installed Codex CLI. Version probing reads no account configuration; chat uses app-server."
+        },
+        "minimax": {
+          "name": "MiniMax Code",
+          "description": "MiniMax terminal coding agent. Requires Node.js 22.19+ / 24+ (not 23); commands: minimax / mcode"
+        },
+        "zcode": {
+          "name": "ZCode",
+          "description": "Zhipu ZCode desktop coding app with GLM models"
+        },
         "grok": {
           "name": "Grok CLI",
           "description": "xAI Grok terminal coding agent"
@@ -742,8 +800,8 @@
       "installPolicyTip": "Installation issues? Copy the error to a terminal CLI AI to resolve",
       "claudeSdkName": "Claude Code SDK",
       "claudeSdkDescription": "Required for Claude AI features. Includes Claude Code SDK and related dependencies.",
-      "codexSdkName": "Codex SDK",
-      "codexSdkDescription": "Required for Codex AI features. Includes OpenAI Codex SDK.",
+      "codexMigratedTitle": "Codex has moved to Provider Management → CLI",
+      "codexMigratedDesc": "Codex no longer installs an SDK here. It uses the Codex CLI already installed on your machine (@openai/codex), and chat runs through the official app-server. Check its status under Provider Management → CLI; if it is not installed yet, run npm install -g @openai/codex in a terminal, then click Re-check there.",
       "loading": "Loading dependency status...",
       "install": "Install",
       "installing": "Installing...",
@@ -770,7 +828,8 @@
       "uninstallSuccess": "{{name}} has been uninstalled",
       "uninstallFailed": "Uninstall failed: {{error}}",
       "updating": "Updating...",
-      "updateSuccess": "{{name}} updated successfully"
+      "updateSuccess": "{{name}} updated successfully",
+      "cliTransportBadge": "CLI · {{transport}}"
     },
     "usage": "Usage Statistics",
     "usageDesc": "View your Token consumption, cost statistics and usage trend analysis",
@@ -780,6 +839,9 @@
     "permissionsDesc": "Manage Claude Code file access and operation permissions",
     "codexPermissionsDesc": "Manage Codex permissions and sandbox policies",
     "permissionsPanel": {
+      "desired": "Desired: {{mode}}",
+      "effective": "Effective: {{mode}}",
+      "conflict": "Native policy rejected the requested access range.",
       "codexSandboxTitle": "Codex Sandbox Mode",
       "codexSandboxDesc": "Control system access boundaries when Codex executes commands. Defaults to the safer workspace-write (read/write within the workspace only). Switch to danger-full-access for system-level commands such as adb or docker.",
       "workspaceWriteTitle": "workspace-write",
@@ -787,7 +849,9 @@
       "fullAccessTitle": "danger-full-access",
       "fullAccessDesc": "Allows higher system access, suitable for commands like adb or docker that require extra permissions.",
       "hint": "This setting only affects Codex process sandboxing and does not change Claude Code permission behavior.",
-      "claudeTip": "Claude Code approval mode is configured from the chat input mode selector."
+      "source": "Source: {{source}}",
+      "readOnlyTitle": "Read only",
+      "readOnlyDesc": "Inspect files without writing to the workspace."
     },
     "commit": {
       "title": "Commit AI",
@@ -1343,7 +1407,9 @@
     "noSessions": "No history sessions",
     "noSessionsDesc": "No session records found in current project",
     "totalSessions": "{{count}} sessions · {{total}} messages",
+    "totalSessionsOnly": "{{count}} sessions",
     "messageCount": "{{count}} messages",
+    "messageCountUnknown": "Message count unavailable",
     "searchPlaceholder": "Search session titles...",
     "noSearchResults": "No matching sessions found",
     "tryOtherKeywords": "Try other search keywords",
@@ -1389,7 +1455,8 @@
       "hoursAgo": "hours ago",
       "minutesAgo": "minutes ago",
       "secondsAgo": "seconds ago"
-    }
+    },
+    "loadMore": "Load more"
   },
   "permission": {
     "dialogTitle": "Permission Request",
@@ -1411,7 +1478,12 @@
       "execute": "Execute {{toolName}}",
       "readDirectory": "Read Directory",
       "timeoutWarning": "Please answer soon, dialog will close in {{seconds}} seconds"
-    }
+    },
+    "userCancelled": "Permission request cancelled",
+    "previewUnavailable": "Native file preview is unavailable. You can deny or cancel this request.",
+    "requestedPermissions": "Requested native permissions",
+    "allowWithRule": "Allow with this command rule",
+    "allowWithNetworkRule": "Allow with this network rule"
   },
   "askUserQuestion": {
     "title": "Claude has some questions for you",
@@ -1535,8 +1607,12 @@
     "quoteSuccess": "Quoted!"
   },
   "contextMenu": {
+    "cut": "Cut",
     "copy": "Copy",
-    "quote": "Quote"
+    "paste": "Paste",
+    "newline": "Insert Newline",
+    "quote": "Quote",
+    "copyLink": "Copy Link Address"
   },
   "usage": {
     "checkingLabel": "Checking for tokentracker-cli…",
@@ -1739,11 +1815,26 @@
     "noParams": "No Parameters",
     "required": "Required",
     "optional": "Optional",
-    "refreshServer": "Refresh {{name}}"
+    "refreshServer": "Refresh {{name}}",
+    "nativeStatus": "Native Codex MCP status"
   },
   "tools": {
     "toolCall": "Tool Call",
     "runCommand": "Run Command",
+    "commandRead": "Read {{path}}",
+    "commandList": "List {{path}}",
+    "commandSearch": "Search {{query}} in {{path}}",
+    "commandApprovalReason": "Approval reason",
+    "patchToggleDiff": "Show changes",
+    "errorOutput": "Error output",
+    "resultUnknown": "Individual tool result unavailable",
+    "patchNoDiff": "Diff unavailable",
+    "patchKind": {
+      "add": "Added",
+      "delete": "Deleted",
+      "update": "Updated",
+      "move": "Moved"
+    },
     "contextEngine": "Context Engine",
     "task": "Task",
     "agent": "Agent",
@@ -1772,6 +1863,9 @@
     "showDiffInIdea": "Show changes in IDEA",
     "diffButton": "Diff",
     "editBatchTitle": "Batch Edit Files",
+    "editGroupProgress": "{{completed}}/{{total}} finished",
+    "editGroupAllCompleted": "All Completed",
+    "editGroupFailed": "Failed: {{count}}",
     "searchBatchTitle": "Batch Search",
     "editPrefix": "Edit: {{fileName}}",
     "lineRange": "Lines {{start}}-{{end}}",
@@ -1786,7 +1880,32 @@
     "bashGroupFailed": "failed",
     "promptLabel": "Prompt",
     "updatePlan": "Update Plan",
-    "applyPatch": "Apply Patch"
+    "applyPatch": "Apply Patch",
+    "reportFindings": {
+      "title": "Report Findings",
+      "findingsCount_one": "{{count}} finding",
+      "findingsCount_other": "{{count}} findings",
+      "confirmedCount_one": "{{count}} confirmed",
+      "confirmedCount_other": "{{count}} confirmed",
+      "plausibleCount_one": "{{count}} to review",
+      "plausibleCount_other": "{{count}} to review",
+      "confirmed": "Confirmed",
+      "plausible": "To review",
+      "fixed": "Fixed",
+      "skipped": "Skipped",
+      "noChangeNeeded": "No change needed",
+      "empty": "No findings",
+      "summaryLabel": "Review summary",
+      "summary": "Summary",
+      "failureScenario": "Failure scenario",
+      "reviewLevel": "Review level: {{level}}",
+      "openFile": "Open {{filePath}}",
+      "expandFinding": "Expand finding",
+      "collapseFinding": "Collapse finding",
+      "expandReport": "Expand findings report",
+      "collapseReport": "Collapse findings report",
+      "untitled": "Untitled finding"
+    }
   },
   "todo": {
     "inProgress": "In Progress {{completed}}/{{total}} tasks",
@@ -2010,11 +2129,15 @@
   "models": {
     "addModel": "Add Model",
     "searchPlaceholder": "Search models",
+    "clearSearch": "Clear search",
     "noModelsFound": "No models found",
+    "noSearchMatches": "No models match \"{{query}}\"",
     "hiddenModelCount": "+ {{count}} more models. Type to search.",
     "pinned": "Pinned",
     "pin": "Pin",
     "unpin": "Unpin",
+    "retiredBadge": "Retired",
+    "retiredCustomHint": "This model id is no longer served by the API. It is sent as-is because you added it as a custom model.",
     "longContext": {
       "label": "1M",
       "shortLabel": "1M context",
@@ -2030,9 +2153,17 @@
         "label": "Sonnet 5",
         "description": "Sonnet 5 · Use the default model"
       },
+      "sonnet55": {
+        "label": "Sonnet 5.5",
+        "description": "Sonnet 5.5 · Latest Sonnet upgrade"
+      },
+      "opus55": {
+        "label": "Opus 5.5",
+        "description": "Opus 5.5 · Latest Opus upgrade"
+      },
       "opus5": {
         "label": "Opus 5",
-        "description": "Opus 5 · Latest Opus upgrade"
+        "description": "Opus 5 · Previous Opus generation"
       },
       "opus46_1m": {
         "label": "Opus 4.6",
@@ -2042,16 +2173,28 @@
         "label": "Haiku 4.5",
         "description": "Haiku 4.5 · Fastest for quick answers"
       },
-      "opus48": {
-        "label": "Opus 4.8",
-        "description": "Opus 4.8 · Previous Opus generation"
+      "fable51": {
+        "label": "Fable 5.1",
+        "description": "Fable 5.1 · Most powerful · Mythos-class"
       },
       "fable5": {
         "label": "Fable 5",
-        "description": "Fable 5 · Most powerful · Mythos-class"
+        "description": "Fable 5 · Previous Fable generation"
       }
     },
     "codex": {
+      "gpt6astra": {
+        "label": "GPT-6 Astra",
+        "description": "New-generation flagship for autonomous computer use and long agentic tasks."
+      },
+      "gpt61sol": {
+        "label": "GPT-6.1 Sol",
+        "description": "GPT-6.1 frontier model for complex professional work."
+      },
+      "gpt6sol": {
+        "label": "GPT-6 Sol",
+        "description": "GPT-6 frontier model for complex professional work."
+      },
       "gpt56sol": {
         "label": "GPT-5.6 Sol",
         "description": "Frontier model for complex professional work."
@@ -2059,6 +2202,10 @@
       "gpt56terra": {
         "label": "GPT-5.6 Terra",
         "description": "GPT-5.6 model that balances intelligence and cost."
+      },
+      "gpt6luna": {
+        "label": "GPT-6 Luna",
+        "description": "GPT-6 model optimized for cost-sensitive workloads."
       },
       "gpt56luna": {
         "label": "GPT-5.6 Luna",
@@ -2108,12 +2255,32 @@
       "tooltip": "Automatically accept file edits",
       "description": "Automatically accept file creation/editing, reducing confirmation steps"
     },
-    "bypassPermissions": {
+    "auto": {
       "label": "Auto Mode",
       "shortLabel": "Auto",
+      "tooltip": "Let the provider review approval requests automatically",
+      "description": "Uses the provider-native reviewer while retaining safety boundaries"
+    },
+    "bypassPermissions": {
+      "label": "Full Auto",
+      "shortLabel": "Full Auto",
       "tooltip": "Bypass all permission checks",
       "description": "Fully automated, bypassing all permission checks [Use with caution]"
     }
+  },
+  "workspaceDiff": {
+    "title": "Workspace changes",
+    "staged": "Staged",
+    "unstaged": "Unstaged",
+    "untracked": "Untracked",
+    "noChanges": "No changes detected",
+    "binary": "Binary",
+    "truncated": "The workspace snapshot was too large and has been truncated",
+    "notGit": "The current directory is not a Git working tree",
+    "refresh": "Refresh",
+    "fileCount": "{{count}} files",
+    "fileCount_one": "{{count}} file",
+    "fileCount_other": "{{count}} files"
   },
   "codexModes": {
     "default": {
@@ -2124,13 +2291,19 @@
     "plan": {
       "label": "Plan Mode",
       "shortLabel": "Plan",
-      "tooltip": "Plan mode - read-only analysis",
-      "description": "Uses only read-only tools, generates plan for user approval"
+      "tooltip": "Native collaboration plan mode",
+      "description": "Builds a native plan before implementation; sandbox and approvals stay independent"
     },
     "acceptEdits": {
       "label": "Auto Edit",
       "tooltip": "Codex approval_policy=on-request – asks for approval when needed",
       "description": "Balanced option. Allows normal editing flow while still requiring approvals when needed."
+    },
+    "auto": {
+      "label": "Approve for me",
+      "shortLabel": "Auto",
+      "tooltip": "Codex approvals_reviewer=auto_review – an automatic reviewer handles eligible approval requests.",
+      "description": "Keeps the workspace-write sandbox and escalates requests the reviewer cannot approve."
     },
     "bypassPermissions": {
       "label": "Full Auto",
@@ -2172,6 +2345,12 @@
     },
     "kimi": {
       "label": "Kimi CLI"
+    },
+    "minimax": {
+      "label": "MiniMax Code"
+    },
+    "zcode": {
+      "label": "ZCode"
     },
     "gemini": {
       "label": "Gemini Cli"
@@ -2392,12 +2571,29 @@
   },
   "dshPresets": {
     "title": "Select DeepSeek Harness agent preset",
-    "none": { "label": "Default", "description": "dsh default headless composition (full toolset)" },
-    "standard": { "label": "Standard", "description": "Full coding agent with the standard toolset" },
-    "code": { "label": "PTC", "description": "Standard capabilities with Code Mode" },
-    "minimal": { "label": "Minimal", "description": "Bash and str_replace_editor only" },
-    "cordis": { "label": "Creator", "description": "Standard capabilities plus composition authoring" },
-    "user": { "description": "Custom preset installed under the DSH home" }
+    "none": {
+      "label": "Default",
+      "description": "dsh default headless composition (full toolset)"
+    },
+    "standard": {
+      "label": "Standard",
+      "description": "Full coding agent with the standard toolset"
+    },
+    "code": {
+      "label": "PTC",
+      "description": "Standard capabilities with Code Mode"
+    },
+    "minimal": {
+      "label": "Minimal",
+      "description": "Bash and str_replace_editor only"
+    },
+    "cordis": {
+      "label": "Creator",
+      "description": "Standard capabilities plus composition authoring"
+    },
+    "user": {
+      "description": "Custom preset installed under the DSH home"
+    }
   },
   "error": {
     "providerNotConfigured": "Provider Not Configured",
@@ -2409,6 +2605,11 @@
     "copied": "Copied",
     "openDependencySettings": "Open Dependency Settings",
     "recommended": "Recommended",
+    "codexWriterConflict": {
+      "title": "Codex thread is busy",
+      "intro": "Another Codex turn or client is writing to this conversation. This send could not start.",
+      "reason": "Stop the turn in the client using this conversation, then send again after it has ended."
+    },
     "codexThreadResume": {
       "title": "Session thread is no longer valid",
       "intro": "Creating a new session will resolve this issue. The thread ID for the current session no longer exists on the Codex server.",
@@ -2446,6 +2647,31 @@
           "step1": "2. Open Dependency Management and reinstall the latest SDK:"
         }
       }
+    },
+    "codexCliUnavailable": {
+      "title": "Codex CLI could not start",
+      "intro": "The Codex CLI runtime exited before it could answer. The failed CLI path and its own output are listed in the error above. This is usually an incomplete Codex CLI installation rather than a plugin bug.",
+      "reason": "The plugin starts \"codex app-server\" from the Codex CLI found on your machine. A half-installed copy - for example a global npm install whose platform binary is missing - exits with code 1 and takes the turn down with it.",
+      "solutions": {
+        "reinstallCodexCli": {
+          "title": "Option 1: Install or update the CLI using the official instructions",
+          "step0": "1. Open the official instructions and choose the standalone installer, npm, or Homebrew for your runtime environment. Update through the original installation channel; do not use npm uninstall for a standalone installation:",
+          "step1": "2. Check the version in a new terminal, refresh Provider Management → CLI, then send again:"
+        },
+        "pointCodexBin": {
+          "title": "Option 2: Point the plugin at a working binary",
+          "step0": "List every codex on your PATH (on Windows: where codex). If the working one is not first, set the CODEX_BIN environment variable to its full path and restart the IDE. The plugin also falls back to later installs automatically."
+        }
+      }
+    }
+  },
+  "codex": {
+    "plan": {
+      "title": "Codex plan",
+      "ready": "Plan ready",
+      "execute": "Execute plan",
+      "executing": "Executing…",
+      "adjust": "Continue adjusting"
     }
   }
 }

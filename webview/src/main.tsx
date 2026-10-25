@@ -17,6 +17,7 @@ import { installRuntimeProviderDispatchers } from './utils/runtimeProviderCapabi
 import { sendBridgeEvent } from './utils/bridge';
 import { debugLog } from './utils/debug';
 import { forceWebviewRepaint } from './utils/forceWebviewRepaint';
+import { fontSizeLevelToScale } from './utils/fontScale';
 import {
   advanceSurfaceDamagePulse,
   beginSurfaceDamagePulse,
@@ -27,6 +28,7 @@ import {
 } from './utils/surfaceDamagePulse';
 import { requestDependencyStatusUntilSettled, waitForBridge } from './utils/bridgeStartup';
 import type { UiFontConfig, CodeFontConfig } from './types/uiFontConfig';
+import { getFontSizeLevel, restoreFontSizeLevel } from './utils/fontSizePreference';
 
 // Silence noisy console output in production (including third-party libs).
 // console.error is preserved so ErrorBoundary and unhandled exceptions still
@@ -139,18 +141,7 @@ function setupScaleRecovery() {
     const fromCss = getComputedStyle(document.documentElement).getPropertyValue('--font-scale').trim();
     if (fromCss) return fromCss;
 
-    const savedLevel = localStorage.getItem('fontSizeLevel');
-    const level = savedLevel ? parseInt(savedLevel, 10) : 3;
-    const fontSizeLevel = level >= 1 && level <= 6 ? level : 3;
-    const fontSizeMap: Record<number, number> = {
-      1: 0.8,
-      2: 0.9,
-      3: 1.0,
-      4: 1.1,
-      5: 1.2,
-      6: 1.4,
-    };
-    return String(fontSizeMap[fontSizeLevel] || 1.0);
+    return String(fontSizeLevelToScale(getFontSizeLevel()));
   };
 
   let hiddenAt: number | null = null;
@@ -405,11 +396,12 @@ function applyEditorTypographyConfig(config: {
   syncFontFamilies();
 }
 
-function applyUiFontConfig(config: UiFontConfig | string) {
+function applyUiFontConfig(config: UiFontConfig | string, isStartup = false) {
   const normalizedConfig: UiFontConfig =
     typeof config === 'string' ? JSON.parse(config) as UiFontConfig : config;
 
   latestUiFontConfig = normalizedConfig;
+  restoreFontSizeLevel(normalizedConfig.fontSizeLevel, isStartup, normalizedConfig.fontSizeRequestId);
   setUiFontFaceStyle(normalizedConfig);
   syncFontFamilies();
 }
@@ -437,7 +429,7 @@ if (window.__pendingFontConfig) {
 
 if (window.__pendingUiFontConfig) {
   debugLog('[Main] Found pending UI font config, applying...');
-  applyUiFontConfig(window.__pendingUiFontConfig);
+  applyUiFontConfig(window.__pendingUiFontConfig, true);
   delete window.__pendingUiFontConfig;
 }
 
@@ -659,30 +651,54 @@ if (typeof window !== 'undefined' && !window.applyBackendTabState) {
   };
 }
 
+// Show and close share a FIFO so bootstrap replay preserves the original request order.
 if (typeof window !== 'undefined' && !window.showPermissionDialog) {
-  debugLog('[Main] Pre-registering showPermissionDialog placeholder');
-  window.showPermissionDialog = (json: string) => {
-    const pending = window.__pendingPermissionDialogRequests || [];
-    pending.push(json);
-    window.__pendingPermissionDialogRequests = pending;
+  window.showPermissionDialog = (payload) => {
+    (window.__pendingDialogEvents ??= []).push({ kind: 'permission', type: 'show', payload });
+  };
+}
+if (typeof window !== 'undefined' && !window.forceClosePermissionDialog) {
+  window.forceClosePermissionDialog = (targetId, dialogToken) => {
+    (window.__pendingDialogEvents ??= []).push({ kind: 'permission', type: 'close', targetId: targetId ?? null, dialogToken });
   };
 }
 
 if (typeof window !== 'undefined' && !window.showAskUserQuestionDialog) {
-  debugLog('[Main] Pre-registering showAskUserQuestionDialog placeholder');
-  window.showAskUserQuestionDialog = (json: string) => {
-    const pending = window.__pendingAskUserQuestionDialogRequests || [];
-    pending.push(json);
-    window.__pendingAskUserQuestionDialogRequests = pending;
+  window.showAskUserQuestionDialog = (payload) => {
+    (window.__pendingDialogEvents ??= []).push({ kind: 'askUserQuestion', type: 'show', payload });
+  };
+}
+if (typeof window !== 'undefined' && !window.forceCloseAskUserQuestionDialog) {
+  window.forceCloseAskUserQuestionDialog = (targetId, dialogToken) => {
+    (window.__pendingDialogEvents ??= []).push({ kind: 'askUserQuestion', type: 'close', targetId: targetId ?? null, dialogToken });
   };
 }
 
 if (typeof window !== 'undefined' && !window.showPlanApprovalDialog) {
-  debugLog('[Main] Pre-registering showPlanApprovalDialog placeholder');
-  window.showPlanApprovalDialog = (json: string) => {
-    const pending = window.__pendingPlanApprovalDialogRequests || [];
-    pending.push(json);
-    window.__pendingPlanApprovalDialogRequests = pending;
+  window.showPlanApprovalDialog = (payload) => {
+    (window.__pendingDialogEvents ??= []).push({ kind: 'planApproval', type: 'show', payload });
+  };
+}
+if (typeof window !== 'undefined' && !window.forceClosePlanApprovalDialog) {
+  window.forceClosePlanApprovalDialog = (targetId, dialogToken) => {
+    (window.__pendingDialogEvents ??= []).push({ kind: 'planApproval', type: 'close', targetId: targetId ?? null, dialogToken });
+  };
+}
+
+// Buffer native Codex interactions until React installs its typed router.
+if (typeof window !== 'undefined' && !window.onCodexRuntimeEvent) {
+  window.onCodexRuntimeEvent = (eventJson) => {
+    (window.__pendingCodexRuntimeEvents ??= []).push(eventJson);
+  };
+}
+if (typeof window !== 'undefined' && !window.onCodexWorkspaceDiff) {
+  window.onCodexWorkspaceDiff = (json) => {
+    window.__pendingCodexWorkspaceDiff = json;
+  };
+}
+if (typeof window !== 'undefined' && !window.onCodexInteractionResponse) {
+  window.onCodexInteractionResponse = (json) => {
+    window.dispatchEvent(new CustomEvent('codex-interaction-response', { detail: json }));
   };
 }
 

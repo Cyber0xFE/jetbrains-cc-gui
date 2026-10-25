@@ -1,11 +1,16 @@
 // hooks/useSettingsThemeSync.ts
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useSyncExternalStore } from 'react';
 import { applyDiffTheme, getStoredDiffTheme, type DiffThemeMode } from '../../../utils/diffTheme';
 import {
   applyChatBarThemeColor,
   CHAT_BAR_COLOR_STORAGE_KEY,
   isValidHexColor,
 } from '../../../utils/chatBarTheme';
+import {
+  getFontSizeLevel,
+  saveFontSizeLevel,
+  subscribeFontSizeLevel,
+} from '../../../utils/fontSizePreference';
 
 // Extend window type for IDE theme injection
 declare global {
@@ -51,12 +56,8 @@ export function useSettingsThemeSync(): UseSettingsThemeSyncReturn {
     return null;
   });
 
-  // Font size level state (1-6, default is 2, i.e. 90%)
-  const [fontSizeLevel, setFontSizeLevel] = useState<number>(() => {
-    const savedLevel = localStorage.getItem('fontSizeLevel');
-    const level = savedLevel ? parseInt(savedLevel, 10) : 2;
-    return level >= 1 && level <= 6 ? level : 2;
-  });
+  // Java recovery and explicit selections share one snapshot across Settings mounts.
+  const fontSizeLevel = useSyncExternalStore(subscribeFontSizeLevel, getFontSizeLevel);
 
   // Chat background color configuration
   const [chatBgColor, setChatBgColor] = useState<string>(() => {
@@ -105,26 +106,6 @@ export function useSettingsThemeSync(): UseSettingsThemeSyncReturn {
     localStorage.setItem('theme', themePreference);
   }, [themePreference, ideTheme]);
 
-  // Font size scaling handler
-  useEffect(() => {
-    // Map level to scale ratio
-    const fontSizeMap: Record<number, number> = {
-      1: 0.8,   // 80%
-      2: 0.9,   // 90% (default)
-      3: 1.0,   // 100%
-      4: 1.1,   // 110%
-      5: 1.2,   // 120%
-      6: 1.4,   // 140%
-    };
-    const scale = fontSizeMap[fontSizeLevel] || 1.0;
-
-    // Apply to root element
-    document.documentElement.style.setProperty('--font-scale', scale.toString());
-
-    // Save to localStorage
-    localStorage.setItem('fontSizeLevel', fontSizeLevel.toString());
-  }, [fontSizeLevel]);
-
   // Chat background color handler
   useEffect(() => {
     if (chatBgColor) {
@@ -168,7 +149,7 @@ export function useSettingsThemeSync(): UseSettingsThemeSyncReturn {
     ideTheme,
     setIdeTheme,
     fontSizeLevel,
-    setFontSizeLevel,
+    setFontSizeLevel: saveFontSizeLevel,
     chatBgColor,
     setChatBgColor,
     userMsgColor,

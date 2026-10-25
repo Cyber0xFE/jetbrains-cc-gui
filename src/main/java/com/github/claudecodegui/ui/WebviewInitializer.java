@@ -49,6 +49,7 @@ import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BooleanSupplier;
+import java.util.function.Consumer;
 import java.util.function.IntPredicate;
 import java.util.function.Supplier;
 
@@ -106,6 +107,7 @@ public class WebviewInitializer {
     private final WebviewHost host;
 
     private final Object bridgeLock = new Object();
+    private final InitializationState initialization = new InitializationState();
 
     private static void applyNodePathToCliBridges(Map<String, MarkerCliBridge> cliBridges, String path) {
         if (cliBridges == null) {
@@ -124,6 +126,7 @@ public class WebviewInitializer {
      * native callback handles during a watchdog recreation.
      */
     private volatile BrowserBridges bridges;
+    private boolean browserCleanupFailed;
     private int pageGeneration;
     private PageLoadKind nextBrowserPageLoadKind = PageLoadKind.INITIAL_LOAD;
 
@@ -135,10 +138,18 @@ public class WebviewInitializer {
      * Create and configure UI components (browser, JS bridge, drag-and-drop).
      */
     public void createUIComponents() {
-        if (this.host.isDisposed()) {
+        if (!SwingUtilities.isEventDispatchThread()) {
+            invokeLaterForToolWindow(this::createUIComponents);
+            return;
+        }
+        if (isOwnerDisposed()) {
             return;
         }
         JBCefBrowser existingBrowser = this.host.getBrowser();
+        if (browserCleanupFailed) {
+            showWebviewRecoveryFailedPanel();
+            return;
+        }
         if (existingBrowser != null) {
             // Browser lifecycle is owned by this initializer. Remote JCEF can
             // report isClosed() for an active proxy, so a non-null host browser
@@ -146,148 +157,266 @@ public class WebviewInitializer {
             LOG.debug("Skip duplicate webview initialization: browser is already active");
             return;
         }
+        int initializationId = this.initialization.begin();
+        if (initializationId == 0) {
+            LOG.debug("Skip duplicate webview initialization: preparation is already running");
+            return;
+        }
 
-        // Use the shared resolver from BridgePreloader for consistent state
-        com.github.claudecodegui.bridge.BridgeDirectoryResolver sharedResolver = BridgePreloader.getSharedResolver();
+        try {
+            schedulePreparation(initializationId);
+        } catch (RuntimeException | LinkageError error) {
+            releaseInitialization(initializationId);
+            if (!isOwnerDisposed()) {
+                LOG.warn("Unable to schedule webview preparation", error);
+                showErrorPanel();
+            }
+        }
+    }
 
-        // Check if bridge extraction is in progress (non-blocking check)
+    private void schedulePreparation(int initializationId) {
+        // Use the shared resolver from BridgePreloader for consistent state.
+        com.github.claudecodegui.bridge.BridgeDirectoryResolver sharedResolver =
+                BridgePreloader.getSharedResolver();
+
+        // Check extraction state without blocking the EDT. The future continuation releases
+        // this initialization only after it schedules a fresh attempt.
         if (sharedResolver.isExtractionInProgress()) {
             LOG.info("[ClaudeSDKToolWindow] Bridge extraction in progress, showing loading panel...");
             showLoadingPanel();
-
-            // Register async callback to reinitialize when extraction completes
-            sharedResolver.getExtractionFuture().thenAcceptAsync(ready -> {
-                if (ready) {
-                    reinitializeAfterExtraction();
-                } else {
-                    invokeLaterForToolWindow(this::showErrorPanel);
-                }
-            });
+            waitForBridgeExtraction(initializationId, sharedResolver);
             return;
         }
 
         ClaudeSDKBridge claudeSDKBridge = host.getClaudeSDKBridge();
         CodexSDKBridge codexSDKBridge = host.getCodexSDKBridge();
         Map<String, MarkerCliBridge> cliBridges = host.getCliBridges();
-
         PropertiesComponent props = PropertiesComponent.getInstance();
         String savedNodePath = props.getValue(NODE_PATH_PROPERTY_KEY);
 
+        // Setting an already-known path is cheap; verification is deliberately deferred to
+        // the preparation worker because it starts a subprocess and may wait several seconds.
         if (savedNodePath != null && !savedNodePath.trim().isEmpty()) {
             String trimmed = savedNodePath.trim();
             claudeSDKBridge.setNodeExecutable(trimmed);
             codexSDKBridge.setNodeExecutable(trimmed);
             applyNodePathToCliBridges(cliBridges, trimmed);
-            NodeDetectionResult nodeResult = claudeSDKBridge.verifyAndCacheNodePath(trimmed);
-            if (nodeResult == null || !nodeResult.isFound()) {
-                showInvalidNodePathPanel(trimmed, nodeResult != null ? nodeResult.getErrorMessage() : null);
-                return;
-            }
-            continueCreateUIComponentsAfterNodeSetup(nodeResult);
-            return;
         }
 
-        // No saved path: auto-detection spawns shell probes that block the calling
-        // thread for several seconds per attempt (and may hang instead of exiting in
-        // VM/container environments), so it must never run on the EDT. Detect on a
-        // pooled thread, then continue initialization back on the EDT.
-        LOG.info("No saved Node.js path found, scheduling auto-detection on background thread...");
         showLoadingPanel();
-        ApplicationManager.getApplication().executeOnPooledThread(() -> {
-            NodeDetectionResult detected;
-            try {
-                detected = claudeSDKBridge.detectNodeWithDetails();
-            } catch (Exception e) {
-                LOG.error("Failed to auto-detect Node.js path: " + e.getMessage(), e);
-                detected = null;
-            }
+        LOG.info("Preparing webview environment and HTML on a background thread...");
+        ApplicationManager.getApplication().executeOnPooledThread(() -> prepareUIComponents(
+                initializationId,
+                savedNodePath,
+                props,
+                claudeSDKBridge,
+                codexSDKBridge,
+                cliBridges,
+                sharedResolver));
+    }
 
-            if (detected != null && detected.isFound() && detected.getNodePath() != null) {
-                props.setValue(NODE_PATH_PROPERTY_KEY, detected.getNodePath());
-                claudeSDKBridge.setNodeExecutable(detected.getNodePath());
-                codexSDKBridge.setNodeExecutable(detected.getNodePath());
-                applyNodePathToCliBridges(cliBridges, detected.getNodePath());
-                claudeSDKBridge.verifyAndCacheNodePath(detected.getNodePath());
-                LOG.info("Auto-detected Node.js: " + detected.getNodePath()
-                    + " (" + detected.getNodeVersion() + ")");
-            } else {
-                // Fall back to invoking "node" by name (the same fallback
-                // NodeDetector.findNodeExecutable uses) so checkEnvironment can
-                // still pass when node is reachable on PATH but the probes failed.
-                LOG.warn("Failed to auto-detect Node.js path. Error: " +
-                    (detected != null ? detected.getErrorMessage() : "Unknown error"));
-                claudeSDKBridge.setNodeExecutable("node");
-                codexSDKBridge.setNodeExecutable("node");
-                applyNodePathToCliBridges(cliBridges, "node");
-            }
+    private void waitForBridgeExtraction(
+            int initializationId,
+            com.github.claudecodegui.bridge.BridgeDirectoryResolver sharedResolver
+    ) {
+        sharedResolver.getExtractionFuture()
+                .thenAcceptAsync(ready -> {
+                    if (ready) {
+                        reinitializeAfterExtraction(initializationId);
+                    } else {
+                        completePreparedInitialization(
+                                initializationId, InitializationResult.environmentUnavailable());
+                    }
+                })
+                .exceptionally(error -> {
+                    LOG.warn("Bridge extraction future failed: " + error.getMessage(), error);
+                    completePreparedInitialization(
+                            initializationId, InitializationResult.environmentUnavailable());
+                    return null;
+                });
+    }
 
-            final NodeDetectionResult nodeResult = detected;
-            invokeLaterForToolWindow(() -> {
-                if (host.isDisposed()) {
+    /** Resolves blocking startup inputs before the EDT creates the native browser. */
+    private void prepareUIComponents(
+            int initializationId,
+            String savedNodePath,
+            PropertiesComponent props,
+            ClaudeSDKBridge claudeSDKBridge,
+            CodexSDKBridge codexSDKBridge,
+            Map<String, MarkerCliBridge> cliBridges,
+            com.github.claudecodegui.bridge.BridgeDirectoryResolver sharedResolver
+    ) {
+        try {
+            if (!isCurrentInitialization(initializationId)) {
+                return;
+            }
+            NodeDetectionResult nodeResult;
+            if (savedNodePath != null && !savedNodePath.trim().isEmpty()) {
+                String trimmed = savedNodePath.trim();
+                nodeResult = claudeSDKBridge.verifyAndCacheNodePath(trimmed);
+                if (nodeResult == null || !nodeResult.isFound()) {
+                    completePreparedInitialization(
+                            initializationId,
+                            InitializationResult.invalidNodePath(
+                                    trimmed,
+                                    nodeResult != null ? nodeResult.getErrorMessage() : null));
                     return;
                 }
-                continueCreateUIComponentsAfterNodeSetup(nodeResult);
-            });
+            } else {
+                // Auto-detection spawns shell probes and can hang in VM/container environments.
+                NodeDetectionResult detected;
+                try {
+                    detected = claudeSDKBridge.detectNodeWithDetails();
+                } catch (Exception e) {
+                    LOG.error("Failed to auto-detect Node.js path: " + e.getMessage(), e);
+                    detected = null;
+                }
+
+                if (detected != null && detected.isFound() && detected.getNodePath() != null) {
+                    if (!isCurrentInitialization(initializationId)) {
+                        return;
+                    }
+                    String detectedPath = detected.getNodePath();
+                    props.setValue(NODE_PATH_PROPERTY_KEY, detectedPath);
+                    claudeSDKBridge.setNodeExecutable(detectedPath);
+                    codexSDKBridge.setNodeExecutable(detectedPath);
+                    applyNodePathToCliBridges(cliBridges, detectedPath);
+                    // Cache the verified version for dependency and session handlers. This extra
+                    // probe remains off the EDT and preserves the previous cache contract.
+                    claudeSDKBridge.verifyAndCacheNodePath(detectedPath);
+                    nodeResult = detected;
+                    LOG.info("Auto-detected Node.js: " + detectedPath
+                            + " (" + detected.getNodeVersion() + ")");
+                } else {
+                    // Fall back to invoking "node" by name so checkEnvironment can still pass
+                    // when the executable is reachable on PATH but discovery probes failed.
+                    LOG.warn("Failed to auto-detect Node.js path. Error: "
+                            + (detected != null ? detected.getErrorMessage() : "Unknown error"));
+                    claudeSDKBridge.setNodeExecutable("node");
+                    codexSDKBridge.setNodeExecutable("node");
+                    applyNodePathToCliBridges(cliBridges, "node");
+                    nodeResult = detected;
+                }
+            }
+
+            if (!isCurrentInitialization(initializationId)) {
+                return;
+            }
+            if (!claudeSDKBridge.checkEnvironment()) {
+                if (sharedResolver.isExtractionInProgress()) {
+                    LOG.info("Environment check is waiting for bridge extraction");
+                    completePreparedInitialization(
+                            initializationId, InitializationResult.waitForExtraction());
+                    return;
+                }
+                if (sharedResolver.isExtractionComplete()) {
+                    LOG.info("Environment check observed a just-completed extraction; retrying...");
+                    completePreparedInitialization(
+                            initializationId, InitializationResult.retryEnvironment());
+                    return;
+                }
+                completePreparedInitialization(
+                        initializationId, InitializationResult.environmentUnavailable());
+                return;
+            }
+
+            // This reads and transforms the approximately 10 MB bundled page. Keep it off the
+            // EDT even when the Node.js path was already cached.
+            if (!isCurrentInitialization(initializationId)) {
+                return;
+            }
+            String htmlContent = loadChatHtmlWithInitialTabState();
+            completePreparedInitialization(
+                    initializationId, InitializationResult.ready(nodeResult, htmlContent));
+        } catch (Exception e) {
+            LOG.error("Failed to prepare webview initialization: " + e.getMessage(), e);
+            completePreparedInitialization(
+                    initializationId, InitializationResult.failure(e.getMessage()));
+        }
+    }
+
+    private void completePreparedInitialization(
+            int initializationId,
+            InitializationResult result
+    ) {
+        if (isOwnerDisposed()) {
+            releaseInitialization(initializationId);
+            return;
+        }
+        invokeLaterForToolWindow(() -> {
+            if (!isCurrentInitialization(initializationId) || isOwnerDisposed()) {
+                releaseInitialization(initializationId);
+                return;
+            }
+
+            switch (result.status) {
+                case WAIT_FOR_EXTRACTION:
+                    waitForBridgeExtraction(initializationId, BridgePreloader.getSharedResolver());
+                    return;
+                case RETRY_ENVIRONMENT:
+                    retryCheckEnvironmentWithBackoff(0, initializationId);
+                    return;
+                case INVALID_NODE_PATH:
+                    releaseInitialization(initializationId);
+                    showInvalidNodePathPanel(result.nodePath, result.errorMessage);
+                    return;
+                case READY:
+                    try {
+                        continueCreateUIComponentsAfterNodeSetup(initializationId, result.nodeResult, result.htmlContent);
+                    } finally {
+                        releaseInitialization(initializationId);
+                    }
+                    return;
+                case ENVIRONMENT_UNAVAILABLE:
+                case FAILURE:
+                default:
+                    // Release terminal results so a later explicit retry can start fresh.
+                    releaseInitialization(initializationId);
+                    if (result.errorMessage != null) {
+                        LOG.warn("Webview preparation failed: " + result.errorMessage);
+                    }
+                    showErrorPanel();
+                    return;
+            }
         });
     }
 
+    private boolean isCurrentInitialization(int initializationId) {
+        return this.initialization.isCurrent(initializationId) && !isOwnerDisposed();
+    }
+
+    private void releaseInitialization(int initializationId) {
+        this.initialization.finish(initializationId);
+    }
+
     /**
-     * Continue UI initialization once the Node.js path has been resolved: environment
-     * check, version gate, then browser creation. Must be called on the EDT.
+     * Continue UI initialization after Node.js, environment, and HTML preparation completed.
+     * Browser creation and Swing/JCEF registration must remain on the EDT.
      */
-    private void continueCreateUIComponentsAfterNodeSetup(NodeDetectionResult nodeResult) {
+    private void continueCreateUIComponentsAfterNodeSetup(
+            int initializationId,
+            NodeDetectionResult nodeResult,
+            String htmlContent
+    ) {
+        if (!isCurrentInitialization(initializationId) || host.getBrowser() != null) {
+            return;
+        }
         ClaudeSDKBridge claudeSDKBridge = host.getClaudeSDKBridge();
         JPanel mainPanel = host.getMainPanel();
         JBCefBrowser browser = null;
 
-        // The async detection path shows a loading panel while probing; clear it so
-        // it cannot linger next to the browser component added below (BorderLayout
-        // keeps only CENTER in its map, it does not remove stale children).
+        // The preparation path shows a loading panel; clear it before adding the browser so
+        // stale components cannot remain next to the new CENTER component.
         mainPanel.removeAll();
 
-        // Use the shared resolver from BridgePreloader for consistent state
-        com.github.claudecodegui.bridge.BridgeDirectoryResolver sharedResolver = BridgePreloader.getSharedResolver();
-
-        if (!claudeSDKBridge.checkEnvironment()) {
-            if (sharedResolver.isExtractionInProgress()) {
-                LOG.info("[ClaudeSDKToolWindow] checkEnvironment failed but extraction in progress, showing loading panel...");
-                showLoadingPanel();
-                sharedResolver.getExtractionFuture().thenAcceptAsync(ready -> {
-                    if (ready) {
-                        reinitializeAfterExtraction();
-                    } else {
-                        invokeLaterForToolWindow(this::showErrorPanel);
-                    }
-                });
-                return;
-            }
-
-            if (sharedResolver.isExtractionComplete()) {
-                LOG.info("[ClaudeSDKToolWindow] checkEnvironment failed but extraction just completed, retrying initialization with exponential backoff...");
-                retryCheckEnvironmentWithBackoff(0);
-                showLoadingPanel();
-                return;
-            }
-
-            showErrorPanel();
-            return;
-        }
-
-        // nodeResult is always the resolved verify/detection result here; a failure
-        // result (or null) simply skips the version gate, matching prior behavior.
+        // nodeResult is the result resolved by the background preparation. A failed discovery
+        // result simply skips the version gate, matching the previous fallback behavior.
         if (nodeResult != null && nodeResult.isFound() && nodeResult.getNodeVersion() != null) {
             if (!NodeDetector.isVersionSupported(nodeResult.getNodeVersion())) {
                 showVersionErrorPanel(nodeResult.getNodeVersion());
                 return;
             }
         }
-
-        // Prewarm daemon in background so first user message starts faster.
-        // Bind the warm runtime to the current logical session epoch so future new-session
-        // transitions cannot accidentally reuse stale anonymous runtime ownership.
-        claudeSDKBridge.prewarmDaemonAsync(host.getProject().getBasePath(), host.getHandlerContext().getSession() != null
-                ? host.getHandlerContext().getSession().getRuntimeSessionEpoch()
-                : null);
 
         // Check JCEF support before creating browser. Keep the precise status
         // so the fallback panel can distinguish a disabled registry flag from
@@ -301,12 +430,21 @@ public class WebviewInitializer {
 
         try {
             browser = JBCefBrowserFactory.create(host.getOsrHandlerFactory());
+            // Native creation may pump EDT events. Recheck ownership before publishing it.
+            if (!isCurrentInitialization(initializationId) || host.getBrowser() != null) {
+                browser.dispose();
+                return;
+            }
             JBCefBrowser createdBrowser = browser;
             host.setBrowser(createdBrowser);
             host.getHandlerContext().setBrowser(createdBrowser);
 
             createdBrowser.getJBCefClient().addRequestHandler(
                     new UiFontResourceRequestHandler(),
+                    createdBrowser.getCefBrowser()
+            );
+            createdBrowser.getJBCefClient().addRequestHandler(
+                    new WebviewAssetRequestHandler(),
                     createdBrowser.getCefBrowser()
             );
 
@@ -394,7 +532,6 @@ public class WebviewInitializer {
             int initialPageGeneration = beginPageLoad(currentBridges, initialPageLoadKind);
             host.activatePageGeneration(initialPageGeneration);
             host.setFrontendReady(false);
-            String htmlContent = loadChatHtmlWithInitialTabState();
 
             // LoadHandler must be registered before loadHTML, otherwise the
             // first frame's onLoadEnd is missed and the JS bridge injection
@@ -538,14 +675,24 @@ public class WebviewInitializer {
                 }
             });
 
+            if (!isCurrentInitialization(initializationId) || host.getBrowser() != createdBrowser) {
+                disposeFailedBrowser(createdBrowser);
+                return;
+            }
             mainPanel.add(browserComponent, BorderLayout.CENTER);
             mainPanel.revalidate();
             mainPanel.repaint();
             host.getWebviewWatchdog().resetTimestamps();
             host.getWebviewWatchdog().start();
+            LOG.info("Webview browser attached, initializerId=" + System.identityHashCode(this)
+                    + ", browserId=" + System.identityHashCode(createdBrowser)
+                    + ", pageGeneration=" + initialPageGeneration);
 
         } catch (IllegalStateException e) {
             this.disposeFailedBrowser(browser);
+            if (!isCurrentInitialization(initializationId)) {
+                return;
+            }
             if (e.getMessage() != null && e.getMessage().contains("JCEF")) {
                 LOG.error("JCEF initialization failed: " + e.getMessage(), e);
                 showJcefNotSupportedPanel(JBCefBrowserFactory.JcefSupportStatus.UNAVAILABLE);
@@ -555,6 +702,9 @@ public class WebviewInitializer {
             }
         } catch (NullPointerException e) {
             this.disposeFailedBrowser(browser);
+            if (!isCurrentInitialization(initializationId)) {
+                return;
+            }
             String msg = e.getMessage();
             if (msg != null && msg.contains("isNull") && msg.contains("robj")) {
                 LOG.error("JCEF remote mode incompatibility: " + e.getMessage(), e);
@@ -565,10 +715,16 @@ public class WebviewInitializer {
             }
         } catch (Exception e) {
             this.disposeFailedBrowser(browser);
+            if (!isCurrentInitialization(initializationId)) {
+                return;
+            }
             LOG.error("Failed to create UI components: " + e.getMessage(), e);
             showErrorPanel();
         } catch (LinkageError e) {
             this.disposeFailedBrowser(browser);
+            if (!isCurrentInitialization(initializationId)) {
+                return;
+            }
             // Platform/JBR binary mismatch (e.g. Android Studio 2026.x whose
             // bundled JBR lacks JCefAppConfig.isRemoteEnabled()) throws Error,
             // not Exception - it must not crash the EDT with a blank panel.
@@ -577,6 +733,67 @@ public class WebviewInitializer {
                     ? JBCefBrowserFactory.JcefSupportStatus.OUTDATED_JBR
                     : JBCefBrowserFactory.JcefSupportStatus.UNAVAILABLE;
             showJcefNotSupportedPanel(status);
+        }
+    }
+
+    private enum InitializationStatus {
+        READY,
+        INVALID_NODE_PATH,
+        WAIT_FOR_EXTRACTION,
+        RETRY_ENVIRONMENT,
+        ENVIRONMENT_UNAVAILABLE,
+        FAILURE
+    }
+
+    private static final class InitializationResult {
+        private final InitializationStatus status;
+        private final NodeDetectionResult nodeResult;
+        private final String htmlContent;
+        private final String nodePath;
+        private final String errorMessage;
+
+        private InitializationResult(
+                InitializationStatus status,
+                NodeDetectionResult nodeResult,
+                String htmlContent,
+                String nodePath,
+                String errorMessage
+        ) {
+            this.status = status;
+            this.nodeResult = nodeResult;
+            this.htmlContent = htmlContent;
+            this.nodePath = nodePath;
+            this.errorMessage = errorMessage;
+        }
+
+        private static InitializationResult ready(NodeDetectionResult nodeResult, String htmlContent) {
+            return new InitializationResult(
+                    InitializationStatus.READY, nodeResult, htmlContent, null, null);
+        }
+
+        private static InitializationResult invalidNodePath(String nodePath, String errorMessage) {
+            return new InitializationResult(
+                    InitializationStatus.INVALID_NODE_PATH, null, null, nodePath, errorMessage);
+        }
+
+        private static InitializationResult waitForExtraction() {
+            return new InitializationResult(
+                    InitializationStatus.WAIT_FOR_EXTRACTION, null, null, null, null);
+        }
+
+        private static InitializationResult retryEnvironment() {
+            return new InitializationResult(
+                    InitializationStatus.RETRY_ENVIRONMENT, null, null, null, null);
+        }
+
+        private static InitializationResult environmentUnavailable() {
+            return new InitializationResult(
+                    InitializationStatus.ENVIRONMENT_UNAVAILABLE, null, null, null, null);
+        }
+
+        private static InitializationResult failure(String errorMessage) {
+            return new InitializationResult(
+                    InitializationStatus.FAILURE, null, null, null, errorMessage);
         }
     }
 
@@ -834,7 +1051,7 @@ public class WebviewInitializer {
                         editorFontConfig, editorFontConfig),
                 String.format(
                         "(function(){ var c = JSON.parse('%s'); " +
-                                "if (window.applyUiFontConfig) { window.applyUiFontConfig(c); } " +
+                                "if (window.applyUiFontConfig) { window.applyUiFontConfig(c, true); } " +
                                 "else { window.__pendingUiFontConfig = c; } })()",
                         escapedUiFontConfig),
                 String.format(
@@ -931,15 +1148,22 @@ public class WebviewInitializer {
         if (currentBridges != null) {
             currentBridges.dispose();
         }
+        try {
+            browser.dispose();
+        } catch (Exception | LinkageError e) {
+            browserCleanupFailed = true;
+            if (host.getBrowser() == null) {
+                host.setBrowser(browser);
+            }
+            LOG.warn("Failed to dispose browser after webview initialization error: " + e.getMessage(), e);
+            return;
+        }
         if (this.host.getBrowser() == browser) {
             this.host.setBrowser(null);
             this.host.getHandlerContext().setBrowser(null);
         }
-        try {
-            browser.dispose();
-        } catch (Exception | LinkageError e) {
-            LOG.warn("Failed to dispose browser after webview initialization error: " + e.getMessage(), e);
-        }
+        LOG.info("Incomplete webview browser disposed, initializerId=" + System.identityHashCode(this)
+                + ", browserId=" + System.identityHashCode(browser));
     }
 
     /**
@@ -957,13 +1181,14 @@ public class WebviewInitializer {
 
     public void showErrorPanel() {
         ClaudeSDKBridge claudeSDKBridge = host.getClaudeSDKBridge();
+        String nodePath = knownNodePath(claudeSDKBridge);
         String message = ClaudeCodeGuiBundle.message(
-            "error.nodeNotFound.message", claudeSDKBridge.getNodeExecutable());
+            "error.nodeNotFound.message", nodePath);
 
         JPanel errorPanel = ErrorPanelBuilder.build(
             ClaudeCodeGuiBundle.message("error.nodeNotFound.title"),
             message,
-            claudeSDKBridge.getNodeExecutable(),
+            nodePath,
             this::handleNodePathSave
         );
         replaceMainContent(errorPanel);
@@ -972,17 +1197,22 @@ public class WebviewInitializer {
     private void showVersionErrorPanel(String currentVersion) {
         ClaudeSDKBridge claudeSDKBridge = host.getClaudeSDKBridge();
         int minVersion = NodeDetector.MIN_NODE_MAJOR_VERSION;
+        String nodePath = knownNodePath(claudeSDKBridge);
         String message = ClaudeCodeGuiBundle.message(
-            "error.nodeVersionTooOld.message",
-            currentVersion, String.valueOf(minVersion), claudeSDKBridge.getNodeExecutable());
+            "error.nodeVersionTooOld.message", currentVersion, String.valueOf(minVersion), nodePath);
 
         JPanel errorPanel = ErrorPanelBuilder.build(
             ClaudeCodeGuiBundle.message("error.nodeVersionTooOld.title"),
             message,
-            claudeSDKBridge.getNodeExecutable(),
+            nodePath,
             this::handleNodePathSave
         );
         replaceMainContent(errorPanel);
+    }
+
+    private static String knownNodePath(ClaudeSDKBridge claudeSDKBridge) {
+        String nodePath = claudeSDKBridge.getCachedNodePath();
+        return nodePath == null || nodePath.trim().isEmpty() ? "node" : nodePath;
     }
 
     private void showInvalidNodePathPanel(String path, String errMsg) {
@@ -1112,60 +1342,104 @@ public class WebviewInitializer {
     }
 
     private void invokeLaterForToolWindow(@NotNull Runnable runnable) {
-        Project project = this.host.getProject();
-        if (project != null && !project.isDisposed()) {
-            ToolWindowManager.getInstance(project).invokeLater(runnable);
+        if (isOwnerDisposed()) {
             return;
         }
-        ApplicationManager.getApplication().invokeLater(runnable);
+        Project project = this.host.getProject();
+        Consumer<Runnable> scheduler = project == null
+                ? action -> ApplicationManager.getApplication().invokeLater(action)
+                : action -> ToolWindowManager.getInstance(project).invokeLater(action);
+        scheduleWhileAlive(this::isOwnerDisposed, scheduler, runnable);
+    }
+
+    private boolean isOwnerDisposed() {
+        Project project = host.getProject();
+        return host.isDisposed() || (project != null && project.isDisposed());
+    }
+
+    /** Check both before enqueueing and at delivery; never fall back for a disposed project. */
+    static void scheduleWhileAlive(BooleanSupplier disposed, Consumer<Runnable> scheduler, Runnable action) {
+        if (disposed.getAsBoolean()) {
+            return;
+        }
+        try {
+            scheduler.accept(() -> {
+                if (!disposed.getAsBoolean()) {
+                    action.run();
+                }
+            });
+        } catch (RuntimeException | LinkageError error) {
+            if (!disposed.getAsBoolean()) {
+                throw error;
+            }
+        }
     }
 
     /**
      * Reinitialize UI after bridge extraction completes.
      */
-    private void reinitializeAfterExtraction() {
+    private void reinitializeAfterExtraction(int expectedInitializationId) {
         invokeLaterForToolWindow(() -> {
+            if (host.isDisposed() || !isCurrentInitialization(expectedInitializationId)) {
+                releaseInitialization(expectedInitializationId);
+                return;
+            }
+            if (host.getBrowser() != null) {
+                releaseInitialization(expectedInitializationId);
+                return;
+            }
             LOG.info("[ClaudeSDKToolWindow] Bridge extraction complete, reinitializing UI...");
-            JPanel mainPanel = host.getMainPanel();
-            mainPanel.removeAll();
+            releaseInitialization(expectedInitializationId);
             createUIComponents();
-            mainPanel.revalidate();
-            mainPanel.repaint();
         });
     }
 
     /**
-     * Retry environment check with exponential backoff strategy.
+     * Retry the environment check without occupying the EDT while the bridge directory settles.
      */
-    private void retryCheckEnvironmentWithBackoff(int attempt) {
-        final int MAX_RETRIES = 3;
-        final int[] BACKOFF_DELAYS_MS = {100, 200, 400};
+    private void retryCheckEnvironmentWithBackoff(int attempt, int expectedInitializationId) {
+        final int maxRetries = 3;
+        final int[] backoffDelaysMs = {100, 200, 400};
 
-        if (attempt >= MAX_RETRIES) {
-            LOG.warn("[ClaudeSDKToolWindow] All " + MAX_RETRIES + " retry attempts failed after extraction completion");
-            invokeLaterForToolWindow(this::showErrorPanel);
+        if (!isCurrentInitialization(expectedInitializationId) || host.isDisposed()) {
+            return;
+        }
+        if (attempt >= maxRetries) {
+            LOG.warn("[ClaudeSDKToolWindow] All " + maxRetries
+                    + " retry attempts failed after extraction completion");
+            invokeLaterForToolWindow(() -> {
+                if (!isCurrentInitialization(expectedInitializationId) || host.isDisposed()) {
+                    return;
+                }
+                releaseInitialization(expectedInitializationId);
+                showErrorPanel();
+            });
             return;
         }
 
-        int delayMs = BACKOFF_DELAYS_MS[attempt];
-        LOG.info("[ClaudeSDKToolWindow] Retry attempt " + (attempt + 1) + "/" + MAX_RETRIES + ", waiting " + delayMs + "ms...");
-
-        CompletableFuture.runAsync(() -> {
-            try {
-                Thread.sleep(delayMs);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-            }
-        }).thenRun(() -> {
-            invokeLaterForToolWindow(() -> {
-                if (host.getClaudeSDKBridge().checkEnvironment()) {
-                    LOG.info("[ClaudeSDKToolWindow] Retry attempt " + (attempt + 1) + " succeeded after extraction completion");
-                    reinitializeAfterExtraction();
-                } else {
-                    retryCheckEnvironmentWithBackoff(attempt + 1);
-                }
-            });
-        });
+        int delayMs = backoffDelaysMs[attempt];
+        LOG.info("[ClaudeSDKToolWindow] Retry attempt " + (attempt + 1) + "/" + maxRetries
+                + ", waiting " + delayMs + "ms...");
+        CompletableFuture.delayedExecutor(delayMs, java.util.concurrent.TimeUnit.MILLISECONDS)
+                .execute(() -> {
+                    if (!isCurrentInitialization(expectedInitializationId) || host.isDisposed()) {
+                        return;
+                    }
+                    boolean environmentReady;
+                    try {
+                        environmentReady = host.getClaudeSDKBridge().checkEnvironment();
+                    } catch (Exception e) {
+                        LOG.warn("Environment retry failed: " + e.getMessage(), e);
+                        environmentReady = false;
+                    }
+                    if (environmentReady) {
+                        LOG.info("[ClaudeSDKToolWindow] Retry attempt " + (attempt + 1)
+                                + " succeeded after extraction completion");
+                        reinitializeAfterExtraction(expectedInitializationId);
+                    } else {
+                        retryCheckEnvironmentWithBackoff(attempt + 1, expectedInitializationId);
+                    }
+                });
     }
 
     /**
@@ -1207,7 +1481,7 @@ public class WebviewInitializer {
                         applyNodePathToCliBridges(cliBridges, detectedPath);
                         LOG.info("Auto-detected and saved Node.js path: " + detectedPath);
                     }
-                    reinitializeUi(mainPanel);
+                    reinitializeUi();
                     return;
                 }
 
@@ -1220,7 +1494,7 @@ public class WebviewInitializer {
                     codexSDKBridge.setNodeExecutable(manualPath);
                     applyNodePathToCliBridges(cliBridges, manualPath);
                     LOG.info("Saved manual Node.js path: " + manualPath);
-                    reinitializeUi(mainPanel);
+                    reinitializeUi();
                 } else {
                     // Verification failed, show error and don't save invalid path.
                     // Don't reinitialize UI, let user try again.
@@ -1241,16 +1515,8 @@ public class WebviewInitializer {
     /**
      * Rebuild the tool window UI on the EDT after the Node.js path changed.
      */
-    private void reinitializeUi(JPanel mainPanel) {
-        invokeLaterForToolWindow(() -> {
-            if (host.isDisposed()) {
-                return;
-            }
-            mainPanel.removeAll();
-            createUIComponents();
-            mainPanel.revalidate();
-            mainPanel.repaint();
-        });
+    private void reinitializeUi() {
+        recreateWebview("node_path_changed", true);
     }
 
     /**
@@ -1259,6 +1525,10 @@ public class WebviewInitializer {
     public void reloadWebview(String reason) {
         runOnEventDispatchThread(() -> {
             if (host.isDisposed()) { return; }
+            if (browserCleanupFailed) {
+                showWebviewRecoveryFailedPanel();
+                return;
+            }
             JBCefBrowser browser = host.getBrowser();
             if (browser == null) {
                 recreateWebview(reason + "_no_browser");
@@ -1310,19 +1580,36 @@ public class WebviewInitializer {
                 ? host.getHandlerContext().getSession() : null;
         String tabProvider = session != null ? session.getProvider() : null;
         String tabModel = session != null ? session.getModel() : null;
-        String htmlWithTabState = htmlLoader.injectInitialTabState(htmlContent, tabProvider, tabModel);
-        String htmlWithDshPresets = htmlLoader.injectInitialDshPresets(
-                htmlWithTabState,
+        return htmlLoader.injectInitialPageState(
+                htmlContent,
+                tabProvider,
+                tabModel,
                 SessionState.discoverUserDshPresetIds());
-        return htmlLoader.injectPageContextBootstrap(htmlWithDshPresets);
     }
 
     /**
      * Recreate the webview from scratch (dispose old, create new).
      */
     public void recreateWebview(String reason) {
+        recreateWebview(reason, false);
+    }
+
+    private void recreateWebview(String reason, boolean replacePreparation) {
         runOnEventDispatchThread(() -> {
-            if (host.isDisposed()) { return; }
+            if (isOwnerDisposed()) { return; }
+            if (browserCleanupFailed) {
+                showWebviewRecoveryFailedPanel();
+                return;
+            }
+            JBCefBrowser browser = host.getBrowser();
+            if (!replacePreparation && initialization.isInProgress()) {
+                LOG.debug("[WebviewWatchdog] Reuse pending webview preparation (" + reason + ")");
+                return;
+            }
+
+            // Invalidate a preparation worker even when the old browser is already absent.
+            // Otherwise a stale worker can publish its HTML after this recreate request.
+            this.initialization.invalidate();
 
             synchronized (this.bridgeLock) {
                 this.nextBrowserPageLoadKind = recoveryPageLoadKind();
@@ -1331,7 +1618,6 @@ public class WebviewInitializer {
             host.activatePageGeneration(invalidationGeneration);
             host.setFrontendReady(false);
             JPanel mainPanel = host.getMainPanel();
-            JBCefBrowser browser = host.getBrowser();
             try {
                 if (browser != null) {
                     try {
@@ -1341,13 +1627,19 @@ public class WebviewInitializer {
                     // Release the JS bridges before the browser itself so the
                     // native callback handles do not outlive the browser.
                     this.disposeBridges();
-                    host.getHandlerContext().setBrowser(null);
-                    host.setBrowser(null);
                     try {
                         browser.dispose();
+                        LOG.info("Previous webview browser disposed, initializerId=" + System.identityHashCode(this)
+                                + ", browserId=" + System.identityHashCode(browser));
                     } catch (Exception | LinkageError e) {
-                        LOG.debug("[WebviewWatchdog] Failed to dispose old browser: " + e.getMessage(), e);
+                        browserCleanupFailed = true;
+                        LOG.warn("[WebviewWatchdog] Browser disposal failed; replacement cancelled", e);
+                        showWebviewRecoveryFailedPanel();
+                        return;
                     }
+                    host.getHandlerContext().setBrowser(null);
+                    host.setBrowser(null);
+                    browserCleanupFailed = false;
                 }
 
                 LOG.info("[WebviewWatchdog] Recreating webview (" + reason + ")");
@@ -1355,7 +1647,7 @@ public class WebviewInitializer {
                 createUIComponents();
                 mainPanel.revalidate();
                 mainPanel.repaint();
-            } catch (Exception e) {
+            } catch (Exception | LinkageError e) {
                 LOG.warn("[WebviewWatchdog] Recreate failed: " + e.getMessage(), e);
                 // An exception reaching here escaped createUIComponents' internal
                 // handler (which already routes JCEF remote NPEs to the restart
@@ -1383,6 +1675,11 @@ public class WebviewInitializer {
      * callback handles do not outlive the browser.
      */
     public void disposeBridges() {
+        // A preparation worker may still be reading the bundled page when the browser is
+        // replaced or the window is disposed. Invalidate its EDT continuation so it cannot
+        // attach stale HTML to a later browser lifecycle.
+        this.initialization.invalidate();
+
         BrowserBridges currentBridges;
         synchronized (this.bridgeLock) {
             currentBridges = this.bridges;
@@ -1396,6 +1693,39 @@ public class WebviewInitializer {
         // dispatching into the host.
         if (currentBridges != null) {
             currentBridges.dispose();
+        }
+    }
+
+    /** Owns preparation admission and invalidation as one atomic state transition. */
+    static final class InitializationState {
+        private int generation;
+        private boolean inProgress;
+
+        synchronized int begin() {
+            if (inProgress) {
+                return 0;
+            }
+            inProgress = true;
+            return ++generation;
+        }
+
+        synchronized boolean isCurrent(int expectedGeneration) {
+            return inProgress && generation == expectedGeneration;
+        }
+
+        synchronized boolean isInProgress() {
+            return inProgress;
+        }
+
+        synchronized void finish(int expectedGeneration) {
+            if (generation == expectedGeneration) {
+                inProgress = false;
+            }
+        }
+
+        synchronized void invalidate() {
+            generation++;
+            inProgress = false;
         }
     }
 

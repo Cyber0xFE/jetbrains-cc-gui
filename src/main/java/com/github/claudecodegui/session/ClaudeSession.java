@@ -6,6 +6,7 @@ import com.github.claudecodegui.provider.claude.ClaudeSDKBridge;
 import com.github.claudecodegui.provider.codex.CodexSDKBridge;
 import com.github.claudecodegui.provider.grok.GrokSDKBridge;
 import com.github.claudecodegui.provider.common.MarkerCliBridge;
+import com.github.claudecodegui.provider.zcode.ZcodeSDKBridge;
 import com.google.gson.Gson;
 import com.google.gson.JsonObject;
 import com.intellij.openapi.diagnostic.Logger;
@@ -39,6 +40,14 @@ public class ClaudeSession {
      */
     private volatile boolean manuallyInterrupted = false;
 
+    /**
+     * Turn owner claimed when a Codex control operation started waiting.
+     * Ending the wait may only clear the waiting state while
+     * no send has claimed it in the meantime; guarded by messageStateLock.
+     */
+    private Object codexControlWaitingTurnOwner;
+    private String codexControlWaitingSessionEpoch;
+
     // Session state manager
     private final com.github.claudecodegui.session.SessionState state;
 
@@ -50,6 +59,7 @@ public class ClaudeSession {
     private final com.github.claudecodegui.session.EditorContextCollector contextCollector;
     private final SessionContextService contextService;
     private final GrokSDKBridge grokSDKBridge;
+    private final ZcodeSDKBridge zcodeSDKBridge;
     private final SessionProviderRouter providerRouter;
     private final SessionSendService sendService;
     private final SessionMessageOrchestrator messageOrchestrator;
@@ -73,9 +83,9 @@ public class ClaudeSession {
         }
 
         public Type type;
-        // Message state is read by callback and UI threads. The coalescer takes a
-        // deep transport snapshot before asynchronous serialization, while volatile
-        // keeps direct readers from observing stale field references.
+        // Provider callbacks and history reloads share SessionState's message lock;
+        // transport snapshots are captured while that lock is held before any async
+        // serialization begins.
         public volatile String content;
         public long timestamp;
         public volatile JsonObject raw; // Raw message data from SDK
@@ -114,6 +124,7 @@ public class ClaudeSession {
         default void onStatusMessage(String message) {
         }
 
+        /** Publishes an identity, or an empty string when a missing transcript retires it. */
         void onSessionIdReceived(String sessionId);
 
         void onPermissionRequested(PermissionRequest request);
@@ -142,8 +153,8 @@ public class ClaudeSession {
         /**
          * Called when a block reset signal is received during streaming.
          * This indicates a new assistant message has started within the stream
-         * (e.g., after a tool_use loop iteration), and the frontend should
-         * clear its streaming content refs to prevent cross-turn content merging.
+         * (e.g., after a tool_use loop iteration), so the frontend can record
+         * the boundary while retaining cumulative streaming content for reconciliation.
          */
         default void onBlockReset() {
         }
@@ -168,6 +179,39 @@ public class ClaudeSession {
          */
         default void onTaskEvent(String eventJson) {
         }
+
+        /**
+         * Called when the native Codex app-server emits a structured runtime event.
+         *
+         * @param eventJson serialized event envelope
+         */
+        default void onCodexRuntimeEvent(String eventJson) {
+        }
+
+        /**
+         * Called when Claude history page metadata is available (for pagination).
+         * @param sessionId the session ID
+         * @param fromTurn the first turn index in the current page
+         * @param totalTurns total number of turns in the session
+         * @param hasMore whether there are more pages to load
+         * @param cursorReset true when the server rejected the client cursor and
+         *        returned the latest page instead; the client must treat the
+         *        current transcript as replaced, not prepended
+         * @param sessionTitle CLI-derived session title (customTitle/aiTitle/
+         *        summary/lastPrompt/firstPrompt chain) carried with the page, or
+         *        null when the transcript has none; lets the header stay stable
+         *        when the loaded page does not include the session's first prompt
+         */
+        default void onClaudeHistoryPageInfo(String sessionId, int fromTurn, int totalTurns, boolean hasMore, boolean cursorReset, String sessionTitle) {
+        }
+
+        /**
+         * Called when an earlier Claude history page fails to load.
+         * @param sessionId the session ID, or null when unknown
+         * @param message human-readable error description
+         */
+        default void onClaudeHistoryPageError(String sessionId, String message) {
+        }
     }
 
     public ClaudeSession(
@@ -186,6 +230,17 @@ public class ClaudeSession {
             Map<String, MarkerCliBridge> cliBridges,
             GrokSDKBridge grokSDKBridge
     ) {
+        this(project, claudeSDKBridge, codexSDKBridge, cliBridges, grokSDKBridge, null);
+    }
+
+    public ClaudeSession(
+            Project project,
+            ClaudeSDKBridge claudeSDKBridge,
+            CodexSDKBridge codexSDKBridge,
+            Map<String, MarkerCliBridge> cliBridges,
+            GrokSDKBridge grokSDKBridge,
+            ZcodeSDKBridge zcodeSDKBridge
+    ) {
         this.project = project;
         this.claudeSDKBridge = claudeSDKBridge;
         this.codexSDKBridge = codexSDKBridge;
@@ -198,7 +253,9 @@ public class ClaudeSession {
         this.callbackFacade = new SessionCallbackFacade(project);
         this.contextService = new SessionContextService(project);
         this.grokSDKBridge = grokSDKBridge;
-        this.providerRouter = new SessionProviderRouter(claudeSDKBridge, codexSDKBridge, cliBridges, this.grokSDKBridge);
+        this.zcodeSDKBridge = zcodeSDKBridge;
+        this.providerRouter = new SessionProviderRouter(
+                claudeSDKBridge, codexSDKBridge, cliBridges, this.grokSDKBridge, this.zcodeSDKBridge);
         this.sendService = new SessionSendService(
                 project,
                 state,
@@ -210,7 +267,8 @@ public class ClaudeSession {
                 codexSDKBridge,
                 cliBridges,
                 contextService,
-                this.grokSDKBridge);
+                this.grokSDKBridge,
+                this.zcodeSDKBridge);
         this.messageOrchestrator = new SessionMessageOrchestrator(
                 project,
                 state,
@@ -219,12 +277,18 @@ public class ClaudeSession {
                 new SessionMessageOrchestrator.SessionHistoryAccess() {
                     @Override
                     public List<JsonObject> getProviderSessionMessages(String provider, String sessionId, String cwd) {
-                        return providerRouter.getSessionMessages(provider, sessionId, cwd);
+                        return ClaudeSession.this.providerRouter.getSessionMessages(provider, sessionId, cwd,
+                                ClaudeSession.this.state.getChannelId());
                     }
 
                     @Override
                     public JsonObject getLatestClaudeUserMessage(String sessionId, String cwd) {
                         return claudeSDKBridge.getLatestClaudeUserMessage(sessionId, cwd);
+                    }
+
+                    @Override
+                    public JsonObject getProviderSessionMessagesPage(String sessionId, String cwd, Integer beforeTurn, int limit) {
+                        return claudeSDKBridge.getSessionMessagesPage(sessionId, cwd, beforeTurn, limit);
                     }
                 }
         );
@@ -239,8 +303,50 @@ public class ClaudeSession {
         callbackFacade.setCallback(callback);
     }
 
+    /** Creates a Codex control receiver fenced to the current operation and session. */
+    public com.github.claudecodegui.provider.common.MessageCallback createCodexControlCallback() {
+        return new CodexMessageHandler(this.state, this.callbackFacade.getCallbackHandler(), false);
+    }
+
+    /**
+     * Claims an idle session's waiting state for a native control operation.
+     *
+     * @param waiting whether to begin or end the control wait
+     * @return whether the control wait was accepted or released
+     */
+    public boolean setCodexControlWaiting(boolean waiting) {
+        synchronized (this.state.getMessageStateLock()) {
+            if (waiting) {
+                if (this.state.isBusy() || this.state.isLoading()) {
+                    return false;
+                }
+                // Controls claim their own turn so a trailing terminal cannot
+                // release a newer send or another control's waiting state.
+                this.codexControlWaitingTurnOwner = this.state.beginTurn();
+                this.codexControlWaitingSessionEpoch = this.state.getRuntimeSessionEpoch();
+            } else {
+                Object owner = this.codexControlWaitingTurnOwner;
+                String epoch = this.codexControlWaitingSessionEpoch;
+                this.codexControlWaitingTurnOwner = null;
+                this.codexControlWaitingSessionEpoch = null;
+                if (owner == null || !this.state.isCurrentTurn(owner)
+                        || !Objects.equals(epoch, this.state.getRuntimeSessionEpoch())) {
+                    return false;
+                }
+                this.state.setBusy(false);
+                this.state.setLoading(false);
+            }
+        }
+        this.callbackFacade.notifyStateChange(this.state.isBusy(), this.state.isLoading(), null);
+        return true;
+    }
+
     public com.github.claudecodegui.session.EditorContextCollector getContextCollector() {
         return contextCollector;
+    }
+
+    public SessionMessageOrchestrator getOrchestrator() {
+        return messageOrchestrator;
     }
 
     // Getters - delegated to SessionState
@@ -279,6 +385,15 @@ public class ClaudeSession {
     }
 
     /**
+     * Return a deep snapshot that can safely cross asynchronous transport boundaries.
+     *
+     * @return an independent message snapshot
+     */
+    public List<Message> getMessagesSnapshot() {
+        return state.getMessagesSnapshot();
+    }
+
+    /**
      * 提供底层会话状态访问，用于历史恢复等需要直接重建会话内存态的场景。
      */
     public SessionState getState() {
@@ -295,16 +410,38 @@ public class ClaudeSession {
 
     /**
      * Set session ID and working directory (used for session restoration).
+     *
+     * @param sessionId selected session or native thread id
+     * @param cwd restored working directory
      */
     public void setSessionInfo(String sessionId, String cwd) {
-        state.setSessionId(sessionId);
-        if (sessionId != null && !sessionId.trim().isEmpty()) {
-            callbackFacade.notifySessionIdReceived(sessionId);
-        }
-        if (cwd != null) {
-            setCwd(cwd);
-        } else {
-            state.setCwd(null);
+        synchronized (this.state.getMessageStateLock()) {
+            if ("codex".equals(this.state.getProvider())
+                    && !Objects.equals(sessionId, this.state.getSessionId())) {
+                // Codex history reuses this facade. Retire the old receiver and
+                // wait before publishing the newly selected thread's history.
+                this.state.rotateRuntimeSessionEpoch();
+                this.codexControlWaitingTurnOwner = null;
+                this.codexControlWaitingSessionEpoch = null;
+                this.state.setBusy(false);
+                this.state.setLoading(false);
+                this.state.setError(null);
+            }
+            this.state.setCodexCwdExplicit(false);
+            this.state.setSessionId(sessionId);
+            if (sessionId != null && !sessionId.trim().isEmpty()) {
+                // Restored controls already use this default route before a send exists.
+                // Keep Stop and the next send on that same runtime instead of claiming another writer.
+                if ("codex".equals(this.state.getProvider()) && this.state.getChannelId() == null) {
+                    this.state.setChannelId("codex");
+                }
+                this.callbackFacade.notifySessionIdReceived(sessionId);
+            }
+            if (cwd != null) {
+                this.setCwd(cwd);
+            } else {
+                this.state.setCwd(null);
+            }
         }
     }
 
@@ -473,6 +610,63 @@ public class ClaudeSession {
     }
 
     /**
+     * Send a message while preserving a frontend-generated client identity.
+     *
+     * @param input user input text
+     * @param agentPrompt application role instructions
+     * @param fileTagPaths selected file references
+     * @param requestedPermissionMode requested permission mode
+     * @param requestedReasoningEffort requested reasoning effort
+     * @param requestedCodexFastMode requested Codex service tier
+     * @param requestedDshPreset requested DSH preset
+     * @param clientMessageId frontend submission identity
+     * @return future completed after the provider turn
+     */
+    public CompletableFuture<Void> send(
+            String input,
+            String agentPrompt,
+            List<String> fileTagPaths,
+            String requestedPermissionMode,
+            String requestedReasoningEffort,
+            String requestedCodexFastMode,
+            String requestedDshPreset,
+            String clientMessageId
+    ) {
+        return send(input, null, agentPrompt, fileTagPaths, requestedPermissionMode,
+                requestedReasoningEffort, requestedCodexFastMode, requestedDshPreset, clientMessageId, null);
+    }
+
+    /**
+     * Send a text turn with a filtered native Codex settings snapshot.
+     *
+     * @param input user input text
+     * @param agentPrompt application role instructions
+     * @param fileTagPaths selected file references
+     * @param requestedPermissionMode legacy compatibility mode
+     * @param requestedReasoningEffort requested reasoning effort
+     * @param requestedCodexFastMode requested Codex service tier
+     * @param requestedDshPreset requested DSH preset
+     * @param clientMessageId frontend submission identity
+     * @param nativeCodexSettings filtered native Codex settings
+     * @return future completed after the provider turn
+     */
+    public CompletableFuture<Void> send(
+            String input,
+            String agentPrompt,
+            List<String> fileTagPaths,
+            String requestedPermissionMode,
+            String requestedReasoningEffort,
+            String requestedCodexFastMode,
+            String requestedDshPreset,
+            String clientMessageId,
+            JsonObject nativeCodexSettings
+    ) {
+        return send(input, null, agentPrompt, fileTagPaths, requestedPermissionMode,
+                requestedReasoningEffort, requestedCodexFastMode, requestedDshPreset,
+                clientMessageId, nativeCodexSettings);
+    }
+
+    /**
      * Send a message with attachments using global agent settings.
      *
      * @deprecated Use {@link #send(String, List, String)} with explicit agent prompt instead.
@@ -555,13 +749,79 @@ public class ClaudeSession {
             String requestedCodexFastMode,
             String requestedDshPreset
     ) {
+        return send(input, attachments, agentPrompt, fileTagPaths, requestedPermissionMode,
+                requestedReasoningEffort, requestedCodexFastMode, requestedDshPreset, null);
+    }
+
+    /**
+     * Send an attachment-aware message with a stable frontend client identity.
+     *
+     * @param input user input text
+     * @param attachments user attachments
+     * @param agentPrompt application role instructions
+     * @param fileTagPaths selected file references
+     * @param requestedPermissionMode requested permission mode
+     * @param requestedReasoningEffort requested reasoning effort
+     * @param requestedCodexFastMode requested Codex service tier
+     * @param requestedDshPreset requested DSH preset
+     * @param requestedClientMessageId frontend submission identity
+     * @return future completed after the provider turn
+     */
+    public CompletableFuture<Void> send(
+            String input,
+            List<Attachment> attachments,
+            String agentPrompt,
+            List<String> fileTagPaths,
+            String requestedPermissionMode,
+            String requestedReasoningEffort,
+            String requestedCodexFastMode,
+            String requestedDshPreset,
+            String requestedClientMessageId
+    ) {
+        return send(input, attachments, agentPrompt, fileTagPaths, requestedPermissionMode,
+                requestedReasoningEffort, requestedCodexFastMode, requestedDshPreset,
+                requestedClientMessageId, null);
+    }
+
+    /**
+     * Send an attachment-aware turn with a filtered native Codex settings snapshot.
+     *
+     * @param input user input text
+     * @param attachments user attachments
+     * @param agentPrompt application role instructions
+     * @param fileTagPaths selected file references
+     * @param requestedPermissionMode legacy compatibility mode
+     * @param requestedReasoningEffort requested reasoning effort
+     * @param requestedCodexFastMode requested Codex service tier
+     * @param requestedDshPreset requested DSH preset
+     * @param requestedClientMessageId frontend submission identity
+     * @param nativeCodexSettings filtered native Codex settings
+     * @return future completed after the provider turn
+     */
+    public CompletableFuture<Void> send(
+            String input,
+            List<Attachment> attachments,
+            String agentPrompt,
+            List<String> fileTagPaths,
+            String requestedPermissionMode,
+            String requestedReasoningEffort,
+            String requestedCodexFastMode,
+            String requestedDshPreset,
+            String requestedClientMessageId,
+            JsonObject nativeCodexSettings
+    ) {
         lastTurnStartedAtMillis = System.currentTimeMillis();
         // Reset the manual-interrupt flag at the start of a new turn so that
         // a fresh send is not mistaken for a user-initiated stop.
         manuallyInterrupted = false;
         String normalizedInput = (input != null) ? input.trim() : "";
         Message userMessage = contextService.buildUserMessage(normalizedInput, attachments);
-        sendService.updateSessionStateForSend(userMessage, normalizedInput);
+        String clientMessageId = requestedClientMessageId == null || requestedClientMessageId.trim().isEmpty()
+                ? "cm-" + UUID.randomUUID() : requestedClientMessageId;
+        if ("codex".equals(state.getProvider()) && userMessage.raw != null) {
+            userMessage.raw.addProperty("clientMessageId", clientMessageId);
+        }
+        Object turnOwner = sendService.updateSessionStateForSend(userMessage, normalizedInput);
 
         final String finalAgentPrompt = agentPrompt;
         final List<String> finalFileTagPaths = fileTagPaths;
@@ -584,14 +844,20 @@ public class ClaudeSession {
                             finalRequestedPermissionMode,
                             finalRequestedReasoningEffort,
                             finalRequestedCodexFastMode,
-                            finalRequestedDshPreset
+                            finalRequestedDshPreset,
+                            clientMessageId,
+                            nativeCodexSettings
                     )
             ).thenCompose(v -> syncUserMessageUuidsAfterSend());
         }).exceptionally(ex -> {
-            state.setError(ex.getMessage());
-            state.setBusy(false);
-            state.setLoading(false);
-            callbackFacade.notifyStateChange(state.isBusy(), state.isLoading(), state.getError());
+            synchronized (state.getMessageStateLock()) {
+                if (state.isCurrentTurn(turnOwner)) {
+                    state.setError(ex.getMessage());
+                    state.setBusy(false);
+                    state.setLoading(false);
+                    callbackFacade.notifyStateChange(state.isBusy(), state.isLoading(), state.getError());
+                }
+            }
             return null;
         });
     }
@@ -606,45 +872,49 @@ public class ClaudeSession {
     public CompletableFuture<Void> interrupt() {
         // Mark this turn as manually interrupted so the stream-end handler
         // suppresses the task-completion notification sound.
-        manuallyInterrupted = true;
+        this.manuallyInterrupted = true;
 
-        String provider = state.getProvider();
-        String channelId = state.getChannelId();
+        String provider = this.state.getProvider();
+        String channelId = this.state.getChannelId();
+        Object turnOwner = this.state.getTurnOwner();
+        String runtimeSessionEpoch = this.state.getRuntimeSessionEpoch();
         if (channelId == null) {
             return CompletableFuture.completedFuture(null);
         }
 
         return CompletableFuture.runAsync(() -> {
             try {
-                providerRouter.interruptChannel(provider, channelId);
-                if (!isCurrentChannel(provider, channelId)) {
-                    return;
+                this.providerRouter.interruptChannel(provider, channelId);
+                synchronized (this.state.getMessageStateLock()) {
+                    if (!this.isCurrentChannel(provider, channelId) || !this.state.isCurrentTurn(turnOwner)
+                            || !Objects.equals(runtimeSessionEpoch, this.state.getRuntimeSessionEpoch())) {
+                        return;
+                    }
+                    this.state.setError(null);
+                    this.state.setBusy(false);
+                    this.state.setLoading(false);
+
+                    // The frontend already ends the stream on interrupt. Replaying stream-end
+                    // here could restore a cached message snapshot after clearMessages.
+                    this.callbackFacade.notifyStateChange(this.state.isBusy(), this.state.isLoading(), this.state.getError());
                 }
-                state.setError(null);  // Clear previous error state
-                state.setBusy(false);
-                state.setLoading(false);  // Also reset loading state
-
-                // Note: We intentionally don't call notifyStreamEnd() here because:
-                // 1. The frontend's interruptSession() already cleans up streaming state directly
-                // 2. Calling notifyStreamEnd() would trigger flushStreamMessageUpdates(),
-                //    which might restore previous messages via lastMessagesSnapshot, interfering with clearMessages
-                // 3. State reset is notified via callbackFacade.notifyStateChange()
-
-                callbackFacade.notifyStateChange(state.isBusy(), state.isLoading(), state.getError());
             } catch (Exception e) {
-                if (isCurrentChannel(provider, channelId)) {
-                    state.setError(e.getMessage());
-                    state.setLoading(false);  // Also reset loading on error
-                    callbackFacade.notifyStateChange(state.isBusy(), state.isLoading(), state.getError());
+                synchronized (this.state.getMessageStateLock()) {
+                    if (this.isCurrentChannel(provider, channelId) && this.state.isCurrentTurn(turnOwner)
+                            && Objects.equals(runtimeSessionEpoch, this.state.getRuntimeSessionEpoch())) {
+                        this.state.setError(e.getMessage());
+                        this.state.setLoading(false);
+                        this.callbackFacade.notifyStateChange(this.state.isBusy(), this.state.isLoading(), this.state.getError());
+                    }
                 }
                 throw new CompletionException(e);
             }
-        });
+        }, "codex".equals(provider) ? CodexSDKBridge.codexControlExecutor() : java.util.concurrent.ForkJoinPool.commonPool());
     }
 
     private boolean isCurrentChannel(String provider, String channelId) {
-        return Objects.equals(provider, state.getProvider())
-                && Objects.equals(channelId, state.getChannelId());
+        return Objects.equals(provider, this.state.getProvider())
+                && Objects.equals(channelId, this.state.getChannelId());
     }
 
     /**
@@ -693,27 +963,32 @@ public class ClaudeSession {
      * Maps frontend permission mode strings to PermissionManager enum values.
      */
     public void setPermissionMode(String mode) {
-        state.setPermissionMode(mode);
+        String normalizedMode = mode != null ? mode.trim() : null;
+        if ("autoEdit".equals(normalizedMode)) {
+            normalizedMode = "acceptEdits";
+        }
+        state.setPermissionMode(normalizedMode);
 
         // Sync PermissionManager mode with frontend mode:
         // - "default" -> DEFAULT (ask every time)
-        // - "acceptEdits"/"autoEdit" -> ACCEPT_EDITS (agent mode, auto-accept file edits)
-        // - "bypassPermissions" -> ALLOW_ALL (auto mode, bypass all permission checks)
-        // - "plan" -> DENY_ALL (plan mode, not yet supported)
+        // - "auto" -> DEFAULT (the provider reviewer decides first; residual requests still ask)
+        // - "acceptEdits" (legacy "autoEdit") -> ACCEPT_EDITS (agent mode, auto-accept file edits)
+        // - "bypassPermissions" -> ALLOW_ALL (full auto, bypass all permission checks)
+        // - "plan" -> DENY_ALL (plan mode, read-only tool policy)
         PermissionManager.PermissionMode pmMode;
-        if ("bypassPermissions".equals(mode)) {
+        if ("bypassPermissions".equals(normalizedMode)) {
             pmMode = PermissionManager.PermissionMode.ALLOW_ALL;
-            LOG.info("Permission mode set to ALLOW_ALL for mode: " + mode);
-        } else if ("acceptEdits".equals(mode) || "autoEdit".equals(mode)) {
+            LOG.info("Permission mode set to ALLOW_ALL for mode: " + normalizedMode);
+        } else if ("acceptEdits".equals(normalizedMode)) {
             pmMode = PermissionManager.PermissionMode.ACCEPT_EDITS;
-            LOG.info("Permission mode set to ACCEPT_EDITS for mode: " + mode);
-        } else if ("plan".equals(mode)) {
+            LOG.info("Permission mode set to ACCEPT_EDITS for mode: " + normalizedMode);
+        } else if ("plan".equals(normalizedMode)) {
             pmMode = PermissionManager.PermissionMode.DENY_ALL;
-            LOG.info("Permission mode set to DENY_ALL for mode: " + mode);
+            LOG.info("Permission mode set to DENY_ALL for mode: " + normalizedMode);
         } else {
-            // "default" or other unknown modes
+            // Default asks directly; native auto reaches Java only when the provider reviewer escalates.
             pmMode = PermissionManager.PermissionMode.DEFAULT;
-            LOG.info("Permission mode set to DEFAULT for mode: " + mode);
+            LOG.info("Permission mode set to DEFAULT for mode: " + normalizedMode);
         }
 
         permissionManager.setPermissionMode(pmMode);
@@ -732,6 +1007,15 @@ public class ClaudeSession {
     public void setModel(String model) {
         state.setModel(model);
         LOG.info("Model updated to: " + model);
+    }
+
+    /**
+     * Set the model exactly as given (no retired-id migration). For explicit
+     * user selections; see {@link SessionState#setModelVerbatim(String)}.
+     */
+    public void setModelVerbatim(String model) {
+        state.setModelVerbatim(model);
+        LOG.info("Model updated (verbatim) to: " + model);
     }
 
     /**
