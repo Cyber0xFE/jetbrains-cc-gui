@@ -11,9 +11,10 @@ import { startTransition } from 'react';
 import type { UseWindowCallbacksOptions } from '../../useWindowCallbacks';
 import type { ClaudeMessage, ClaudeRawMessage } from '../../../types';
 import { sendBridgeEvent } from '../../../utils/bridge';
+import { clearPendingStreamStart, isPendingStreamStartActive } from '../../../utils/streamLifecycle';
 import { THROTTLE_INTERVAL } from '../../useStreamingMessages';
 import { parseSequence } from '../parseSequence';
-import { getStreamEndHandlingMode, getRawUuid, mergeRawBlocksForFinalization } from '../messageSync';
+import { getStreamEndHandlingMode, getRawUuid, isCodexMessageSnapshot, mergeRawBlocksForFinalization } from '../messageSync';
 
 /**
  * Pour every tool_use_id carried by tool_result blocks inside one message's raw
@@ -249,6 +250,9 @@ export function registerStreamingCallbacks(options: UseWindowCallbacksOptions): 
 
   window.onStreamStart = (mode?: string | boolean) => {
     if (window.__sessionTransitioning) return;
+    // The dispatched turn now owns the loading state — late cleanup echoes
+    // from a previously interrupted turn must no longer be suppressed.
+    clearPendingStreamStart();
     const isReplayStart = mode === 'replay' || mode === true;
     // Clear any stale pending updateMessages from previous turn.
     // This prevents onStreamEnd from using outdated snapshot data.
@@ -493,7 +497,18 @@ export function registerStreamingCallbacks(options: UseWindowCallbacksOptions): 
       return;
     }
 
+    // A dispatched turn that has not streamed yet owns the loading state; an
+    // onStreamEnd arriving within that window belongs to an older (e.g.
+    // interrupted) turn — its loading reset would tear the new turn's state
+    // down and re-arm the message-queue drain mid-boot (repeat sends).
+    // Finalize the old turn's bubble below, but keep the marker and the
+    // loading state; the dispatched turn's own stream end will reset both.
+    const suppressLoadingReset = isPendingStreamStartActive();
+
     clearStallWatchdog();
+    const nativeProvider = options.currentProviderRef.current === 'codex';
+    // Commit the whole native transcript before clearing refs, including separate final items.
+    if (nativeProvider) window.__flushPendingUpdateMessages?.();
     const parsedSequence = parseSequence(sequence);
     // Only update minAcceptedUpdateSequence for valid positive sequences.
     // The fallback path sends sequence=-1 which means "no sequence info" —
@@ -508,6 +523,13 @@ export function registerStreamingCallbacks(options: UseWindowCallbacksOptions): 
       if (typeof window.__cancelPendingUpdateMessages === 'function') {
         window.__cancelPendingUpdateMessages();
       }
+      if (suppressLoadingReset) {
+        window.__streamEndProcessedTurnId = currentTurnId > 0 ? currentTurnId : undefined;
+        return;
+      }
+      // This branch resets the loading state, so the pending-stream-start
+      // marker has served its purpose.
+      clearPendingStreamStart();
       setStreamingActive(false);
       setLoading(false);
       setLoadingStartTime(null);
@@ -660,6 +682,9 @@ export function registerStreamingCallbacks(options: UseWindowCallbacksOptions): 
     // captured in a closure variable after setMessages() would be empty.
     setMessages((prev) => {
       let newMessages = prev;
+      const nativeAssistantIndex = nativeProvider ? findLastAssistantIndex(prev) : -1;
+      const nativeTarget = nativeAssistantIndex >= 0 && isCodexMessageSnapshot(prev[nativeAssistantIndex])
+        && prev[nativeAssistantIndex].__turnId === endedStreamingTurnId;
       // FIX (Issue #1315 investigation, residual risk A): Prefer the snapshot
       // index, but fall back to a __turnId scan when an interleaved
       // updateMessages reordered/shrank the list so prev[idx] is no longer the
@@ -684,7 +709,7 @@ export function registerStreamingCallbacks(options: UseWindowCallbacksOptions): 
         return !backendSnapshotAssistant
           || compareMessageIdentity(message, backendSnapshotAssistant) !== 'conflict';
       };
-      let idx = endedStreamingMessageIndex;
+      let idx = nativeTarget ? nativeAssistantIndex : endedStreamingMessageIndex;
       if (!belongsToEndedTurn(prev[idx])
           && endedStreamingTurnId > 0) {
         for (let i = prev.length - 1; i >= 0; i--) {
@@ -739,12 +764,13 @@ export function registerStreamingCallbacks(options: UseWindowCallbacksOptions): 
         // FIX: Keep __turnId on the message for a short period to prevent
         // incorrect merging with history messages. The __turnId will be
         // removed later when history is loaded or a new turn starts.
-        const finalContent = endedStreamingContent || newMessages[idx].content || '';
+        const finalContent = nativeTarget ? newMessages[idx].content ?? ''
+          : endedStreamingContent || newMessages[idx].content || '';
         // Merge backend structure into the latest frontend raw instead of choosing by
         // text length. A tool-only assistant can contain more structural information
         // while having fewer text characters than the locally accumulated snapshot.
         let finalRaw = newMessages[idx].raw;
-        if (endedBackendRaw != null) {
+        if (!nativeTarget && endedBackendRaw != null) {
           finalRaw = mergeRawBlocksForFinalization(finalRaw, endedBackendRaw) as ClaudeMessage['raw'];
         }
         newMessages[idx] = {
@@ -862,9 +888,15 @@ export function registerStreamingCallbacks(options: UseWindowCallbacksOptions): 
     // arrives before onStreamEnd and gets ignored by the isStreamingRef guard,
     // while the flush callback's showLoading("false") may be delayed or lost
     // (e.g., due to slow message serialization or multi-hop async chains).
-    setLoading(false);
-    setLoadingStartTime(null);
-    setIsThinking(false);
+    // Suppressed while a freshly dispatched turn awaits its stream start: the
+    // onStreamEnd then belongs to an older turn, whose bubble was finalized
+    // above but whose loading reset must not claim the new turn's state.
+    if (!suppressLoadingReset) {
+      clearPendingStreamStart();
+      setLoading(false);
+      setLoadingStartTime(null);
+      setIsThinking(false);
+    }
 
     // Mark this turn as processed — idempotency guard for dual-path delivery
     window.__streamEndProcessedTurnId = endedStreamingTurnId;

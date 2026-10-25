@@ -17,6 +17,7 @@ import { DEFAULT_PERMISSION_DIALOG_TIMEOUT_SECONDS } from './utils/permissionDia
 import { createApplyHistoryModel } from './applyHistoryModel';
 import { useAppGlobalEffects } from './useAppGlobalEffects';
 import { useAppChatController } from './useAppChatController';
+import { SubagentStateContext } from './contexts/SubagentContext';
 
 const App = () => {
   const { t } = useTranslation();
@@ -66,7 +67,7 @@ const App = () => {
   // callbacks, message processing/sending, queue, computations, rewind ──
   const {
     sessionTitle, mergedMessages, getMessageText, getContentBlocks,
-    findToolResult, getToolResultRaw, subagents, globalTodos,
+    findToolResult, getToolResultRaw, subagents, allSubagents, globalTodos,
     filteredFileChanges, rewindableMessages,
     subagentHistoryCtxValue, sessionIdCtxValue,
     chatInputRef, messagesContainerRef, messagesEndRef, inputAreaRef, isAutoScrollingRef,
@@ -80,13 +81,16 @@ const App = () => {
     handleRewindSelect, handleRewindSelectCancel, handleRewindConfirm, handleRewindCancel,
     rollbackDialogOpen, currentRollbackRequest, isRollingBack,
     showRollbackDialog, handleRollbackConfirm, handleRollbackCancel,
+    codexPlan, codexPlanExecutionPending, onExecuteCodexPlan, onContinueCodexPlan,
+    codexCompactionPending,
+    codexCompactionStartedAt,
   } = useAppChatController({ model, applyHistoryModel, setPermissionDialogTimeoutSeconds });
 
   const statusPanelExpanded = !userCollapsedRef.current;
 
   // ── Render ──
   return (
-    <>
+    <SubagentStateContext.Provider value={allSubagents}>
       <ToastContainer messages={toasts} onDismiss={dismissToast} />
       <AppHeader
         sessionTitle={sessionTitle}
@@ -107,6 +111,10 @@ const App = () => {
           onAutoSaveFilesEnabledChange={model.handleAutoSaveFilesEnabledChange}
           permissionDialogTimeoutSeconds={permissionDialogTimeoutSeconds}
           onPermissionDialogTimeoutChange={setPermissionDialogTimeoutSeconds}
+          codexSandboxSelection={model.codexSandboxSelection}
+          codexSandboxSource={model.codexSandboxSource}
+          codexSandboxEffective={model.codexEffectiveSandbox}
+          onCodexSandboxSelectionChange={model.handleCodexSandboxSelectionChange}
         />
       ) : (
         <AppChatArea
@@ -178,6 +186,12 @@ const App = () => {
           onRollbackUserMessage={showRollbackDialog}
           isRollingBack={isRollingBack}
           onReorderQueue={reorderMessageQueue}
+          codexPlan={codexPlan}
+          codexPlanExecutionPending={codexPlanExecutionPending}
+          codexCompactionPending={codexCompactionPending}
+          codexCompactionStartedAt={codexCompactionStartedAt}
+          onExecuteCodexPlan={onExecuteCodexPlan}
+          onContinueCodexPlan={onContinueCodexPlan}
           onLoadSession={loadHistorySession}
           onDeleteSession={deleteHistorySession}
           onDeleteSessions={deleteHistorySessions}
@@ -209,7 +223,7 @@ const App = () => {
         onRollbackConfirm={handleRollbackConfirm}
         onRollbackCancel={handleRollbackCancel}
       />
-    </>
+    </SubagentStateContext.Provider>
   );
 };
 

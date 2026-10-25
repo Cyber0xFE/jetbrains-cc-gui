@@ -424,6 +424,10 @@ public class WebviewInitializer {
                     new UiFontResourceRequestHandler(),
                     createdBrowser.getCefBrowser()
             );
+            createdBrowser.getJBCefClient().addRequestHandler(
+                    new WebviewAssetRequestHandler(),
+                    createdBrowser.getCefBrowser()
+            );
 
             // JCEF JS bridges must be created and registered before loadHTML,
             // because the window.sendToJava / shortcut / clipboard handlers
@@ -1009,7 +1013,7 @@ public class WebviewInitializer {
                         editorFontConfig, editorFontConfig),
                 String.format(
                         "(function(){ var c = JSON.parse('%s'); " +
-                                "if (window.applyUiFontConfig) { window.applyUiFontConfig(c); } " +
+                                "if (window.applyUiFontConfig) { window.applyUiFontConfig(c, true); } " +
                                 "else { window.__pendingUiFontConfig = c; } })()",
                         escapedUiFontConfig),
                 String.format(

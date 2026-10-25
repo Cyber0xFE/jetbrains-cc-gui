@@ -34,6 +34,7 @@ interface ReasoningSelectProps {
  * Controls the depth of reasoning for AI models.
  * Visibility and available levels depend on the selected model:
  * - Codex GPT-5.6: low/medium/high/xhigh/max; other Codex models: up to xhigh
+ * - Grok CLI: low/medium/high/xhigh
  * - Claude Opus 5.5, Opus 5 and Opus 4.8: low/medium/high/xhigh/max
  * - Claude Sonnet 5, Sonnet 4.7, Opus 4.6, and Sonnet 4.6: low/medium/high/max
  * - Claude Haiku 4.5 and legacy models: hidden (no adaptive thinking support)
@@ -60,6 +61,8 @@ export const ReasoningSelect = ({
     minWidth: embedded ? 180 : 200,
     maxWidth: 280,
     submenuMaxHeight: SUBMENU_MAX_HEIGHT_PX,
+    // No footer sits below this fly-out; the default clearance would lift it off its own row.
+    submenuBottomClearance: 0,
   });
 
   const { isVisible, availableLevels, currentLevel } = useReasoningEffortGuard(
@@ -128,10 +131,20 @@ export const ReasoningSelect = ({
   }, [embedded, isOpen]);
 
   useLayoutEffect(() => {
-    if (embedded || isOpen) {
-      recalculate();
-    }
-  }, [embedded, isOpen, recalculate]);
+    if (!embedded && !isOpen) return;
+    recalculate();
+    window.addEventListener('resize', recalculate);
+    // Wrapping and parent-menu resizing can change the measured bounds after opening.
+    const observer = new ResizeObserver(recalculate);
+    if (dropdownRef.current) observer.observe(dropdownRef.current);
+    const anchor = embedded ? triggerRef?.current : buttonRef.current;
+    if (anchor) observer.observe(anchor);
+    if (embedded && anchor?.parentElement) observer.observe(anchor.parentElement);
+    return () => {
+      window.removeEventListener('resize', recalculate);
+      observer.disconnect();
+    };
+  }, [embedded, isOpen, recalculate, triggerRef]);
 
   if (!isVisible) return null;
   if (!currentLevel) return null;
@@ -140,6 +153,7 @@ export const ReasoningSelect = ({
     ? {
         minWidth: 0,
         maxWidth: maxWidth ?? 280,
+        boxSizing: 'border-box',
         ...(maxHeight != null
           ? { maxHeight: `${maxHeight}px`, overflowY: 'auto' as const }
           : { overflowY: 'visible' as const }),

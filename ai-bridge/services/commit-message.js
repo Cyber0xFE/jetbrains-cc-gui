@@ -3,7 +3,7 @@
  *
  * Routes to:
  *   - Claude: Anthropic SDK messages.stream (stateless)
- *   - Codex:  Codex SDK one-shot thread
+ *   - Codex:  ephemeral app-server thread
  *   - Grok / Kimi / OpenCode / PI: headless CLI ask (session-less)
  *
  * stdin JSON: { prompt, provider, model }
@@ -17,13 +17,9 @@
  *   [COMMIT_ERROR]<msg>          — failure
  */
 
-import { pathToFileURL } from 'node:url';
-
 import {
   loadClaudeSdk,
   isClaudeSdkAvailable,
-  loadCodexSdk,
-  isCodexSdkAvailable,
 } from '../utils/sdk-loader.js';
 import {
   setupApiKey,
@@ -32,18 +28,17 @@ import {
   loadClaudeSettings,
   getCliUserAgent,
 } from '../config/api-config.js';
-import { mapModelIdToSdkName, resolveModelFromSettings } from '../utils/model-utils.js';
-import { getRealHomeDir } from '../utils/path-utils.js';
+import { resolveModelFromSettings, resolveSdkModelName } from '../utils/model-utils.js';
+import { getRealHomeDir, isMainEntryModule } from '../utils/path-utils.js';
 import { getClaudeCliPathOverride } from '../utils/claude-cli-path.js';
 import { ensureAnthropicSdk } from './claude/message-utils.js';
-import { buildCodexCliEnvironment } from './codex/codex-utils.js';
+import { generateCodexText } from './codex/codex-text-service.js';
 import { askCliProvider, isCliAskProvider } from './cli-ask.js';
 
 let claudeSdk = null;
-let codexSdk = null;
 
 /**
- * Lazy-load and cache the Claude Agent SDK (same pattern as ensureCodexSdk).
+ * Lazy-load and cache the Claude Agent SDK.
  */
 async function ensureClaudeSdk() {
   if (!claudeSdk) {
@@ -69,18 +64,6 @@ function canUseAnthropicAskPath(config) {
  */
 export function resolveClaudeCommitPath(config) {
   return canUseAnthropicAskPath(config) ? 'ask' : 'agent';
-}
-
-async function ensureCodexSdk() {
-  if (!codexSdk) {
-    if (!isCodexSdkAvailable()) {
-      const error = new Error('Codex SDK not installed. Please install via Settings > Dependencies.');
-      error.code = 'SDK_NOT_INSTALLED';
-      throw error;
-    }
-    codexSdk = await loadCodexSdk();
-  }
-  return codexSdk;
 }
 
 function readStdin() {
@@ -241,6 +224,45 @@ export async function askClaudeNonStreaming(client, modelId, prompt) {
 }
 
 /**
+ * Build the Claude Agent SDK options for the commit fallback path.
+ * Exposed for tests.
+ *
+ * MCP servers are deliberately NOT loaded (`strictMcpConfig`). Generating a
+ * commit message never runs tools, and booting the user's configured MCP
+ * servers happens before the model can stream anything: measured ~12s on a
+ * typical config versus ~0.5s with MCP suppressed. This is the same reasoning
+ * behind the deny-all canUseTool below - the commit task must stay a plain
+ * text-to-text call, not an agent session.
+ */
+export function buildClaudeAgentCommitOptions({
+  model,
+  sdkModelName,
+  workingDirectory,
+  claudeCliOverride,
+}) {
+  return {
+    cwd: workingDirectory,
+    // Commit message generation only summarizes a diff - it must never execute
+    // tools. Deny-all canUseTool, and do NOT load project/local settings (whose
+    // permissions.allow could otherwise auto-approve a prompt-injected tool call).
+    permissionMode: 'default',
+    model: sdkModelName,
+    maxTurns: 1,
+    env: buildCliEnv(),
+    // settingsEnv is deliberately omitted: this call runs maxTurns: 1 with a deny-all
+    // canUseTool, so it never spawns a subagent and tier resolution cannot apply here.
+    settings: buildWebviewControlledSettingsOverride(model),
+    settingSources: ['user'],
+    // Only MCP servers passed via the `mcpServers` option are used, and we pass
+    // none: project .mcp.json, user settings and plugin servers are ignored.
+    strictMcpConfig: true,
+    canUseTool: async () => ({ behavior: 'deny', message: 'Commit message generation does not execute tools' }),
+    includePartialMessages: true,
+    ...(claudeCliOverride && { pathToClaudeCodeExecutable: claudeCliOverride }),
+  };
+}
+
+/**
  * Fallback path: Claude Agent SDK (CLI login OAuth / apiKeyHelper / Bedrock).
  * The Agent SDK performs the CLI's native OAuth flow, so it works without a
  * raw API key (#1655). Mirrors enhancePromptWithClaudeAgent in prompt-enhancer.js.
@@ -251,7 +273,9 @@ async function generateWithClaudeAgent(prompt, model, config) {
 
   console.log(`[CommitMessage] Agent SDK path (auth: ${config.authType}, base URL: ${config.baseUrl || 'https://api.anthropic.com'})`);
 
-  const sdkModelName = mapModelIdToSdkName(model);
+  // Exact id, not the family alias - see resolveSdkModelName.
+  const commitSettings = loadClaudeSettings();
+  const sdkModelName = resolveSdkModelName(model, resolveModelFromSettings(model, commitSettings && commitSettings.env));
   console.log(`[CommitMessage] Claude Agent model mapping: ${model} -> ${sdkModelName}`);
 
   const workingDirectory = getRealHomeDir();
@@ -262,21 +286,12 @@ async function generateWithClaudeAgent(prompt, model, config) {
   ].join('\n');
 
   const claudeCliOverride = getClaudeCliPathOverride();
-  const options = {
-    cwd: workingDirectory,
-    // Commit message generation only summarizes a diff - it must never execute
-    // tools. Deny-all canUseTool, and do NOT load project/local settings (whose
-    // permissions.allow could otherwise auto-approve a prompt-injected tool call).
-    permissionMode: 'default',
-    model: sdkModelName,
-    maxTurns: 1,
-    env: buildCliEnv(),
-    settings: buildWebviewControlledSettingsOverride(model),
-    settingSources: ['user'],
-    canUseTool: async () => ({ behavior: 'deny', message: 'Commit message generation does not execute tools' }),
-    includePartialMessages: true,
-    ...(claudeCliOverride && { pathToClaudeCodeExecutable: claudeCliOverride }),
-  };
+  const options = buildClaudeAgentCommitOptions({
+    model,
+    sdkModelName,
+    workingDirectory,
+    claudeCliOverride,
+  });
 
   console.log('[CommitMessage] Calling Claude Agent SDK...');
 
@@ -338,53 +353,11 @@ async function generateWithClaudeAgent(prompt, model, config) {
 }
 
 async function generateWithCodex(prompt, model) {
-  const sdk = await ensureCodexSdk();
-  const Codex = sdk.Codex || sdk.default || sdk;
-  const { cliEnv } = buildCodexCliEnvironment(process.env);
-  const codex = new Codex({ env: cliEnv });
-
-  const workingDirectory = getRealHomeDir();
-  const fullPrompt = [
-    prompt,
-    '',
-    'Remember: output only the commit message, wrapped in <commit></commit>, with no explanation.',
-  ].join('\n');
-
-  // Stateless one-shot thread.
-  const thread = codex.startThread({
-    skipGitRepoCheck: true,
-    maxTurns: 1,
-    workingDirectory,
-    model,
-    sandboxMode: 'read-only',
-    approvalPolicy: 'never',
+  console.log(`[CommitMessage] Calling Codex app-server with model: ${model}`);
+  return generateCodexText({
+    prompt, model, onDelta: emitContentDelta,
+    developerInstructions: 'Output only the commit message, wrapped in <commit></commit>, with no explanation.',
   });
-
-  console.log(`[CommitMessage] Calling Codex SDK with model: ${model}`);
-
-  const { events } = await thread.runStreamed(fullPrompt);
-  let responseText = '';
-  let lastAgentMessage = '';
-
-  for await (const event of events) {
-    console.log(`[CommitMessage] Codex event: ${event.type}`);
-    if (event.type === 'item.updated' || event.type === 'item.completed') {
-      const item = event.item;
-      if (item?.type === 'agent_message' && typeof item.text === 'string') {
-        const delta = extractAppendedDelta(lastAgentMessage, item.text);
-        if (delta) {
-          responseText += delta;
-        }
-        lastAgentMessage = item.text;
-      }
-    }
-  }
-
-  console.log(`[CommitMessage] Codex response text length: ${responseText.length}`);
-  if (responseText.trim()) {
-    return responseText.trim();
-  }
-  throw new Error('Codex commit response is empty');
 }
 
 function emitContentDelta(text) {
@@ -445,6 +418,6 @@ async function main() {
   }
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (isMainEntryModule(import.meta.url)) {
   main();
 }

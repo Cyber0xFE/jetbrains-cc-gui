@@ -16,6 +16,7 @@ import { CHANGELOG_DATA } from '../version/changelog';
 import { useDialogs } from '../contexts/DialogContext';
 import { useUIState } from '../contexts/UIStateContext';
 import ContextUsageDialog from './ContextUsageDialog';
+import WorkspaceDiffDialog from './WorkspaceDiffDialog';
 import { DEFAULT_PERMISSION_DIALOG_TIMEOUT_SECONDS } from '../utils/permissionDialogTimeout';
 import { setSkipNewSessionConfirm } from '../utils/skipNewSessionConfirm';
 
@@ -106,7 +107,8 @@ export const AppDialogs = ({
   const { t } = useTranslation();
   const {
     permissionDialogOpen, currentPermissionRequest,
-    handlePermissionApprove, handlePermissionApproveAlways, handlePermissionSkip,
+    handlePermissionApprove, handlePermissionApproveAlways, handlePermissionSkip, handlePermissionCancel,
+    handlePermissionDecision,
     askUserQuestionDialogOpen, currentAskUserQuestionRequest,
     handleAskUserQuestionSubmit, handleAskUserQuestionCancel,
     planApprovalDialogOpen, currentPlanApprovalRequest,
@@ -179,6 +181,8 @@ export const AppDialogs = ({
         onApprove={handlePermissionApprove}
         onSkip={handlePermissionSkip}
         onApproveAlways={handlePermissionApproveAlways}
+        onCancel={handlePermissionCancel}
+        onDecision={handlePermissionDecision}
         timeoutSeconds={permissionDialogTimeoutSeconds}
       />
       <AskUserQuestionDialog
@@ -236,6 +240,7 @@ export const AppDialogs = ({
           onClose={closeContextUsageDialog}
         />
       ) : null}
+      <WorkspaceDiffDialog />
     </>
   );
 };

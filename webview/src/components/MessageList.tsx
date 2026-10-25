@@ -86,6 +86,7 @@ interface MessageListProps {
   isThinking: boolean;
   loading: boolean;
   loadingStartTime: number | null;
+  waitingLabel?: string;
   t: TFunction;
   getMessageText: (message: ClaudeMessage) => string;
   getContentBlocks: (message: ClaudeMessage) => ClaudeContentBlock[];
@@ -113,6 +114,7 @@ export const MessageList = memo(forwardRef<MessageListRevealHandle, MessageListP
   isThinking,
   loading,
   loadingStartTime,
+  waitingLabel,
   t,
   getMessageText,
   getContentBlocks,
@@ -142,13 +144,15 @@ export const MessageList = memo(forwardRef<MessageListRevealHandle, MessageListP
     getDetailedOutputEnabled()
   );
 
-  // Context menu for message list (copy + quote, when text selected)
+  // Context menu for message list (copy link address / copy + quote selection)
   const ctxMenu = useContextMenu();
   const containerRef = useRef<HTMLDivElement | null>(null);
 
   const handleMessageContextMenu = useCallback((e: React.MouseEvent) => {
-    const sel = window.getSelection();
-    if (sel && sel.toString().trim().length > 0) {
+    const target = e.target as HTMLElement | null;
+    const onLink = Boolean(target?.closest?.('a[href]'));
+    const hasSelection = (window.getSelection()?.toString() ?? '').trim().length > 0;
+    if (onLink || hasSelection) {
       ctxMenu.open(e);
     }
   }, [ctxMenu.open]);
@@ -264,7 +268,9 @@ export const MessageList = memo(forwardRef<MessageListRevealHandle, MessageListP
     const eventName = currentProvider === 'codex' ? 'load_codex_history_page' : 'load_claude_history_page';
     const sent = sendBridgeEvent(eventName, JSON.stringify({
       sessionId: currentSessionId,
-      beforeTurn: historyPageInfo.fromTurn,
+      ...(historyPageInfo.source === 'native'
+        ? { cursor: historyPageInfo.cursor }
+        : { beforeTurn: historyPageInfo.fromTurn }),
     }));
     if (!sent) {
       loadingEarlierHistoryRef.current = false;
@@ -305,6 +311,10 @@ export const MessageList = memo(forwardRef<MessageListRevealHandle, MessageListP
     () => (shouldCollapse ? messages.slice(collapsedCount) : messages),
     [messages, shouldCollapse, collapsedCount]
   );
+  const toolSignatureCache = useMemo(
+    () => new WeakMap<ClaudeMessage, { messageIndex: number; signature: string }>(),
+    [getContentBlocks, findToolResult, currentSessionId],
+  );
   return (
     <div ref={containerRef} onContextMenu={handleMessageContextMenu}>
       {ctxMenu.visible && (
@@ -313,8 +323,16 @@ export const MessageList = memo(forwardRef<MessageListRevealHandle, MessageListP
           y={ctxMenu.y}
           onClose={ctxMenu.close}
           items={[
-            { label: t('contextMenu.quote', 'Quote'), action: () => quoteToChatInput(ctxMenu.selectedText) },
-            { label: t('contextMenu.copy', 'Copy'), action: () => copySelection(ctxMenu.savedRange, ctxMenu.selectedText) },
+            // Link action first (browser convention), and independent of any
+            // text selection so right-clicking a link alone still offers it.
+            ...(ctxMenu.linkHref ? [{
+              label: t('contextMenu.copyLink', 'Copy Link Address'),
+              action: () => copySelection(null, ctxMenu.linkHref ?? ''),
+            }] : []),
+            ...(ctxMenu.selectedText ? [
+              { label: t('contextMenu.quote', 'Quote'), action: () => quoteToChatInput(ctxMenu.selectedText) },
+              { label: t('contextMenu.copy', 'Copy'), action: () => copySelection(ctxMenu.savedRange, ctxMenu.selectedText) },
+            ] : []),
           ]}
         />
       )}
@@ -350,7 +368,15 @@ export const MessageList = memo(forwardRef<MessageListRevealHandle, MessageListP
       {visibleMessages.map((message, visibleIndex) => {
         const messageIndex = shouldCollapse ? visibleIndex + collapsedCount : visibleIndex;
         const messageKey = messageKeys[messageIndex];
-        const toolResultSignature = getMessageToolResultSignature(message, messageIndex, getContentBlocks, findToolResult);
+        let cachedSignature = toolSignatureCache.get(message);
+        if (!cachedSignature || cachedSignature.messageIndex !== messageIndex) {
+          cachedSignature = {
+            messageIndex,
+            signature: getMessageToolResultSignature(message, messageIndex, getContentBlocks, findToolResult),
+          };
+          toolSignatureCache.set(message, cachedSignature);
+        }
+        const toolResultSignature = cachedSignature.signature;
 
         return (
           <MessageItem
@@ -379,7 +405,7 @@ export const MessageList = memo(forwardRef<MessageListRevealHandle, MessageListP
       })}
 
       {/* Loading indicator */}
-      {loading && <WaitingIndicator startTime={loadingStartTime ?? undefined} />}
+      {loading && <WaitingIndicator startTime={loadingStartTime ?? undefined} label={waitingLabel} />}
       <div ref={messagesEndRef} />
     </div>
   );

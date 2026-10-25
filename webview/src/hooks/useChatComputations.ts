@@ -31,6 +31,8 @@ import { extractSubagentsFromMessages, useSubagents } from './useSubagents';
 import { useCodexSubagentStatusPolling } from './useCodexSubagentStatusPolling';
 import { useFileChanges } from './useFileChanges';
 import { useFileChangesManagement } from './useFileChangesManagement';
+import { useCodexSessionEdits } from './useCodexSessionEdits';
+import type { FileChangeSummary } from '../types';
 import type { useMessageProcessing } from './useMessageProcessing';
 
 interface UseChatComputationsParams {
@@ -46,6 +48,16 @@ interface UseChatComputationsParams {
   currentSessionIdRef: RefObject<string | null>;
   getMessageText: ReturnType<typeof useMessageProcessing>['getMessageText'];
   getContentBlocks: ReturnType<typeof useMessageProcessing>['getContentBlocks'];
+}
+
+interface ToolResultEntry {
+  result: ToolResultBlock;
+  raw: ClaudeRawMessage;
+}
+
+interface ToolResultSnapshot {
+  sessionId: string | null;
+  entries: Map<string, ToolResultEntry>;
 }
 
 /**
@@ -193,58 +205,61 @@ export function useChatComputations({
   getMessageText,
   getContentBlocks,
 }: UseChatComputationsParams) {
-  // Scan over messages for tool_result blocks, with a per-id ref-backed cache.
-  const toolResultRawMapRef = useRef<Map<string, ClaudeRawMessage>>(new Map());
+  const rawResults = useMemo(() => new WeakMap<ClaudeRawMessage, ToolResultEntry[]>(), [currentSessionId]);
+  const previousSnapshot = useRef<ToolResultSnapshot | null>(null);
+  const toolResults = useMemo(() => {
+    const entries = new Map<string, ToolResultEntry>();
+    for (const message of messages) {
+      const raw = message.raw;
+      if (!raw || typeof raw !== 'object') continue;
+      let extracted = rawResults.get(raw);
+      if (!extracted) {
+        const content = raw.content ?? raw.message?.content;
+        extracted = Array.isArray(content)
+          ? content.filter((block): block is ToolResultBlock => block?.type === 'tool_result')
+            .map((result) => ({ result, raw }))
+          : [];
+        rawResults.set(raw, extracted);
+      }
+      for (const entry of extracted) {
+        const toolId = entry.result.tool_use_id;
+        if (toolId) entries.set(toolId, entry);
+      }
+    }
+    const previous = previousSnapshot.current;
+    if (previous?.sessionId === currentSessionId && previous.entries.size === entries.size
+      && Array.from(entries).every(([id, entry]) => previous.entries.get(id) === entry)) {
+      return previous.entries;
+    }
+    previousSnapshot.current = { sessionId: currentSessionId, entries };
+    return entries;
+  }, [messages, currentSessionId, rawResults]);
 
-  const findToolResult = useCallback((toolUseId?: string, messageIndex?: number): ToolResultBlock | null => {
-    if (!toolUseId || typeof messageIndex !== 'number') return null;
-    const currentMessages = messages;
-    const cachedRaw = toolResultRawMapRef.current.get(toolUseId);
-    if (cachedRaw != null) {
-      const content = cachedRaw.content ?? cachedRaw.message?.content;
-      if (Array.isArray(content)) {
-        const hit = content.find(
-          (block): block is ToolResultBlock =>
-            Boolean(block) && block.type === 'tool_result' && block.tool_use_id === toolUseId,
-        );
-        if (hit) return hit;
-      }
-    }
-    for (let i = 0; i < currentMessages.length; i += 1) {
-      const candidate = currentMessages[i];
-      const raw = candidate.raw;
-      if (!raw || typeof raw === 'string') continue;
-      const content = raw.content ?? raw.message?.content;
-      if (!Array.isArray(content)) continue;
-      const resultBlock = content.find(
-        (block): block is ToolResultBlock =>
-          Boolean(block) && block.type === 'tool_result' && block.tool_use_id === toolUseId,
-      );
-      if (resultBlock) {
-        toolResultRawMapRef.current.set(toolUseId, raw);
-        return resultBlock;
-      }
-    }
-    return null;
-  }, [messages]);
+  const findToolResult = useCallback((toolUseId?: string, messageIndex?: number): ToolResultBlock | null => (
+    toolUseId && typeof messageIndex === 'number' ? toolResults.get(toolUseId)?.result ?? null : null
+  ), [toolResults]);
 
   const getToolResultRaw = useCallback<GetToolResultRawFn>(
-    (toolUseId: string) => toolResultRawMapRef.current.get(toolUseId) ?? null,
-    [],
+    (toolUseId: string) => toolResults.get(toolUseId)?.raw ?? null,
+    [toolResults],
   );
 
   // File changes (depend on findToolResult which is now stable above).
+  const editMessages = useCodexSessionEdits(currentProvider, currentSessionId, messages, streamingActive);
+  const fileChangesRef = useRef<FileChangeSummary[]>([]);
   const fileChangeMgmt = useFileChangesManagement({
-    currentSessionId, currentSessionIdRef, messages,
+    currentSessionId, currentSessionIdRef, messages, currentProvider, fileChangesRef,
     getContentBlocks, findToolResult,
   });
   const fileChanges = useFileChanges({
-    messages, getContentBlocks, findToolResult,
+    messages: editMessages, getContentBlocks, findToolResult,
     startFromIndex: fileChangeMgmt.baseMessageIndex,
+    ignoredLedgerKeys: fileChangeMgmt.ignoredLedgerKeys,
     // Sidechain Edit/Write from Agent/Task tools must appear in the Edits tab too
     subagentHistories,
     currentSessionId,
   });
+  fileChangesRef.current = fileChanges;
 
   const filteredFileChanges = useMemo(() => {
     if (fileChangeMgmt.processedFiles.length === 0) return fileChanges;
@@ -375,6 +390,7 @@ export function useChatComputations({
     fileChangeMgmt,
     filteredFileChanges,
     subagents,
+    allSubagents: extractedSubagents,
     globalTodos,
     rewindableMessages,
     sessionTitle,

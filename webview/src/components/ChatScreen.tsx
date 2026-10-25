@@ -28,6 +28,8 @@ import { CodexPetStatusBridge } from './codexPet/CodexPetStatusBridge';
 import { shouldToggleCodexPet } from './codexPet/petState';
 import { useCodexPetPreference } from './codexPet/useCodexPetPreference';
 import { reconcileMessageKeys, type MessageKeySnapshot } from '../utils/messageUtils';
+import { CodexPlanActions } from './CodexPlanActions';
+import type { CodexPlanItem } from '../hooks/useCodexPlanState';
 
 type SubagentHistoryMap = ReturnType<typeof useMessages>['subagentHistories'];
 type ProviderState = ReturnType<typeof useModelProviderState>;
@@ -127,6 +129,14 @@ export interface ChatScreenProps {
   // Rollback
   onRollbackUserMessage?: (messageIndex: number, message: ClaudeMessage) => void;
   isRollingBack?: boolean;
+
+  // Native Codex plan actions
+  codexPlan?: CodexPlanItem | null;
+  codexPlanExecutionPending?: boolean;
+  codexCompactionPending?: boolean;
+  codexCompactionStartedAt?: number | null;
+  onExecuteCodexPlan?: () => void;
+  onContinueCodexPlan?: () => void;
 }
 
 /**
@@ -159,9 +169,15 @@ export const ChatScreen = ({
   onAutoOpenFileEnabledChange, onLongContextChange,
   messageQueue, onRemoveFromQueue, onReorderQueue,
   onRollbackUserMessage, isRollingBack = false,
+  codexPlan = null, codexPlanExecutionPending = false,
+  codexCompactionPending = false,
+  codexCompactionStartedAt = null,
+  onExecuteCodexPlan, onContinueCodexPlan,
 }: ChatScreenProps) => {
   const { t } = useTranslation();
   const { messages, status, loading, isThinking, streamingActive, loadingStartTime, subagentHistories } = useMessages();
+  // Native stream cleanup can precede the control reply without ending its wait.
+  const waiting = loading || codexCompactionPending;
   const { currentSessionId } = useSession();
   const previousMessageKeySnapshotRef = useRef<MessageKeySnapshot | undefined>(undefined);
   const messageKeySnapshot = useMemo(
@@ -289,8 +305,9 @@ export const ChatScreen = ({
                   messageKeys={messageKeySnapshot.keys}
                   streamingActive={streamingActive}
                   isThinking={isThinking}
-                  loading={loading}
-                  loadingStartTime={loadingStartTime}
+                  loading={waiting}
+                  loadingStartTime={codexCompactionPending ? codexCompactionStartedAt : loadingStartTime}
+                  waitingLabel={codexCompactionPending ? t('chat.compactSummary.nativeInProgress') : undefined}
                   t={t}
                   getMessageText={getMessageText}
                   getContentBlocks={getContentBlocks}
@@ -313,7 +330,7 @@ export const ChatScreen = ({
         <CodexPetStatusBridge
           key={currentProvider}
           active={petEnabled && (currentProvider === 'codex' || currentProvider === 'claude')}
-          loading={loading}
+          loading={waiting}
           streamingActive={streamingActive}
           isThinking={isThinking}
           status={status}
@@ -342,10 +359,19 @@ export const ChatScreen = ({
         />
       </StatusPanelErrorBoundary>
 
+      {currentProvider === 'codex' && onExecuteCodexPlan && onContinueCodexPlan && (
+        <CodexPlanActions
+          plan={codexPlan}
+          executionPending={codexPlanExecutionPending}
+          onExecute={onExecuteCodexPlan}
+          onContinue={onContinueCodexPlan}
+        />
+      )}
+
       <div className="input-area" ref={inputAreaRef}>
         <ChatInputBox
           ref={chatInputRef}
-          isLoading={loading}
+          isLoading={waiting}
           selectedModel={selectedModel}
           permissionMode={permissionMode}
           codexNativeAutoReviewAvailable={codexNativeAutoReviewAvailable}

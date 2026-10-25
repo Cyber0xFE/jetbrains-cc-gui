@@ -56,6 +56,7 @@ describe('useWindowCallbacks integration', () => {
     setStreamingEnabledSetting: vi.fn(),
     setSendShortcut: vi.fn(),
     setAutoOpenFileEnabled: vi.fn(),
+    setAutoSaveFilesEnabled: vi.fn(),
     setPermissionDialogTimeoutSeconds: vi.fn(),
     setSdkStatus: vi.fn(),
     setSdkStatusLoaded: vi.fn(),
