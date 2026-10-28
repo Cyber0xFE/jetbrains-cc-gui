@@ -19,6 +19,8 @@ import com.intellij.util.concurrency.AppExecutorUtil;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * Handles model and provider selection, reasoning effort, and slash command refresh.
@@ -26,6 +28,9 @@ import java.util.concurrent.CompletableFuture;
 public class ModelProviderHandler {
 
     private static final Logger LOG = Logger.getInstance(ModelProviderHandler.class);
+
+    private static final Pattern CAPACITY_SUFFIX_PATTERN =
+            Pattern.compile("\\s*\\[([0-9.]+)([kKmM])\\]\\s*$");
 
     static final Map<String, Integer> MODEL_CONTEXT_LIMITS = new HashMap<>();
     static {
@@ -124,24 +129,25 @@ public class ModelProviderHandler {
             context.setCurrentModel(model);
 
             String provider = context.getCurrentProvider();
-            boolean isCodex = "codex".equalsIgnoreCase(provider);
+            boolean isClaude = "claude".equalsIgnoreCase(provider);
 
             if (context.getSession() != null) {
                 // Explicit user pick from the webview: store verbatim so a custom
                 // model id is never rewritten by the retired-model migration.
                 context.getSession().setModelVerbatim(model);
-                // Codex usage snapshots embed the previous model's
-                // model_context_window, so they must be dropped on a model switch.
                 // Claude snapshots only carry token counts and the transcript is
                 // unchanged, so the current context survives the switch and only
-                // the capacity denominator needs recalculation.
-                if (modelChanged && isCodex) {
+                // the capacity denominator needs recalculation. Every other
+                // provider embeds provider-specific context metadata in its
+                // snapshot (Codex model_context_window, Grok cached_read_tokens,
+                // ...), so the stale snapshot must be dropped.
+                if (modelChanged && !isClaude) {
                     clearSessionUsage();
                 }
                 LOG.info("[ModelProviderHandler] Updated session model to canonical ID: " + model);
             }
 
-            if (modelChanged && isCodex) {
+            if (modelChanged && !isClaude) {
                 usagePushService.clearUsageDisplay();
             }
 
@@ -149,10 +155,12 @@ public class ModelProviderHandler {
                 com.github.claudecodegui.notifications.ClaudeNotifier.setModel(context.getProject(), model);
             }
 
-            String resolvedModelForUsage = isCodex ? model : resolveConfiguredClaudeModelFromSettings(model);
-            int newMaxTokens = isCodex
-                    ? getModelContextLimit(provider, model)
-                    : getClaudeContextLimit(resolvedModelForUsage);
+            String resolvedModelForUsage = isClaude
+                    ? resolveConfiguredClaudeModelFromSettings(model)
+                    : model;
+            int newMaxTokens = isClaude
+                    ? getClaudeContextLimit(resolvedModelForUsage)
+                    : getModelContextLimit(provider, model);
             LOG.info("[ModelProviderHandler] Model context limit: " + newMaxTokens
                     + " tokens for selected model: " + model
                     + ", resolved model: " + resolvedModelForUsage);
@@ -459,15 +467,16 @@ public class ModelProviderHandler {
 
     /**
      * A settings mapping replaces the model name but not the user's 1M choice.
-     * The bridge appends {@code [1m]} back before spawning the CLI, so the Java
-     * context-window calculation must see the same suffix.
+     * This mirrors {@code resolveModelFromSettings} in ai-bridge: the request owns
+     * the suffix, so any suffix carried by the mapped value is stripped first and
+     * re-appended only when the request asks for 1M.
      */
     static String preserveRequested1MContext(String requestedModel, String mappedModel) {
-        if (mappedModel == null || requestedModel == null
-                || !requestedModel.toLowerCase().endsWith("[1m]")) {
+        if (mappedModel == null || requestedModel == null) {
             return mappedModel;
         }
-        return mappedModel.toLowerCase().endsWith("[1m]") ? mappedModel : mappedModel + "[1m]";
+        String base = mappedModel.replaceFirst("(?i)\\[1m\\]$", "");
+        return requestedModel.toLowerCase().endsWith("[1m]") ? base + "[1m]" : base;
     }
 
     private static String readConfiguredEnvValue(JsonObject env, String key) {
@@ -506,8 +515,7 @@ public class ModelProviderHandler {
         if (model == null) {
             return null;
         }
-        java.util.regex.Pattern pattern = java.util.regex.Pattern.compile("\\s*\\[([0-9.]+)([kKmM])\\]\\s*$");
-        java.util.regex.Matcher matcher = pattern.matcher(model);
+        Matcher matcher = CAPACITY_SUFFIX_PATTERN.matcher(model);
 
         if (matcher.find()) {
             try {

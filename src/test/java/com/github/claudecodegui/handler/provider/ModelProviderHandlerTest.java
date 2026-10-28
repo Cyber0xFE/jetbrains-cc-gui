@@ -77,15 +77,23 @@ public class ModelProviderHandlerTest {
         assertEquals("deepseek-v3", resolved);
     }
 
+    /**
+     * The request owns the 1M choice, matching {@code resolveModelFromSettings}
+     * in ai-bridge: a suffix stored on the mapping value must not turn on 1M when
+     * the user did not ask for it.
+     */
     @Test
-    public void shouldUseResolvedModelForContextLimitWhenCapacitySuffixExists() {
+    public void shouldLetRequestOwnTheCapacitySuffixLikeTheBridge() {
         JsonObject env = new JsonObject();
         env.addProperty("ANTHROPIC_DEFAULT_SONNET_MODEL", "glm-4.7[1M]");
 
-        String resolved = ModelProviderHandler.resolveConfiguredClaudeModel("claude-sonnet-4-6", env);
+        String without1M = ModelProviderHandler.resolveConfiguredClaudeModel("claude-sonnet-4-6", env);
+        String with1M = ModelProviderHandler.resolveConfiguredClaudeModel("claude-sonnet-4-6[1m]", env);
 
-        assertEquals("glm-4.7[1M]", resolved);
-        assertEquals(1_000_000, ModelProviderHandler.getModelContextLimit(resolved));
+        assertEquals("glm-4.7", without1M);
+        assertEquals(200_000, ModelProviderHandler.getModelContextLimit(without1M));
+        assertEquals("glm-4.7[1m]", with1M);
+        assertEquals(1_000_000, ModelProviderHandler.getModelContextLimit(with1M));
     }
 
     /**
@@ -107,12 +115,16 @@ public class ModelProviderHandlerTest {
     }
 
     @Test
-    public void shouldNotDuplicateExisting1MSuffixFromMapping() {
+    public void shouldNormalizeExisting1MSuffixFromMapping() {
         JsonObject env = new JsonObject();
         env.addProperty("ANTHROPIC_DEFAULT_SONNET_MODEL", "deepseek-v4-pro[1M]");
 
-        assertEquals("deepseek-v4-pro[1M]",
+        // The mapped suffix is stripped and re-appended in the bridge's canonical
+        // lowercase form, so it is never duplicated.
+        assertEquals("deepseek-v4-pro[1m]",
                 ModelProviderHandler.resolveConfiguredClaudeModel("claude-sonnet-5[1m]", env));
+        assertEquals("deepseek-v4-pro",
+                ModelProviderHandler.resolveConfiguredClaudeModel("claude-sonnet-5", env));
     }
 
     @Test
@@ -357,6 +369,54 @@ public class ModelProviderHandlerTest {
     }
 
     /**
+     * Non-Claude providers keep their pre-PR behavior: a model switch drops the
+     * provider-specific snapshot and the denominator stays on the static table.
+     * CLAUDE_CODE_MAX_CONTEXT_TOKENS is a Claude-only override.
+     */
+    @Test
+    public void handleSetModelClearsGrokContextUsageAndIgnoresClaudeOverride() throws Exception {
+        Path settings = Files.createTempFile("claude-settings", ".json");
+        Files.writeString(settings, """
+                {
+                  "env": {
+                    "CLAUDE_CODE_MAX_CONTEXT_TOKENS": "128000"
+                  }
+                }
+                """);
+        ClaudeContextWindowOverrideProvider.setInstanceForTests(
+                ClaudeContextWindowOverrideProvider.createForTests(settings)
+        );
+
+        try {
+            HandlerContext context = createHandlerContext();
+            ClaudeSession session = new ClaudeSession(null, null, null, null);
+            session.setProvider("grok");
+            session.setModel("grok-4");
+            JsonObject raw = new JsonObject();
+            JsonObject usage = new JsonObject();
+            usage.addProperty("input_tokens", 1000);
+            usage.addProperty("output_tokens", 500);
+            usage.addProperty("cached_read_tokens", 30000);
+            raw.add("usage", usage);
+            session.getState().addMessage(new ClaudeSession.Message(
+                    ClaudeSession.Message.Type.ASSISTANT, "restored", raw));
+            context.setSession(session);
+            context.setCurrentProvider("grok");
+            context.setCurrentModel("grok-4");
+            RecordingUsagePushService usagePushService = new RecordingUsagePushService(context);
+
+            new ModelProviderHandler(context, usagePushService).handleSetModel("grok-build");
+
+            assertFalse(raw.has("usage"));
+            assertTrue(usagePushService.cleared);
+            assertTrue(usagePushService.recalculated);
+            assertEquals(500_000, usagePushService.lastMaxTokens);
+        } finally {
+            ClaudeContextWindowOverrideProvider.setInstanceForTests(null);
+        }
+    }
+
+    /**
      * A set_model from the webview is an explicit user choice. A custom model id
      * that is also in the retired-migration table must reach the session verbatim
      * instead of being rewritten to its replacement (custom opus-4-8 -> opus-5).
@@ -404,6 +464,7 @@ public class ModelProviderHandlerTest {
     private static final class RecordingUsagePushService extends UsagePushService {
         private boolean cleared;
         private boolean recalculated;
+        private int lastMaxTokens = -1;
 
         private RecordingUsagePushService(HandlerContext context) {
             super(context);
@@ -417,6 +478,7 @@ public class ModelProviderHandlerTest {
         @Override
         public void pushUsageUpdateAfterModelChange(int newMaxTokens) {
             recalculated = true;
+            lastMaxTokens = newMaxTokens;
         }
     }
 
